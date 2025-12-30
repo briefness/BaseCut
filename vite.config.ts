@@ -10,6 +10,7 @@ export default defineConfig({
   },
   // 配置 SharedArrayBuffer 所需的 headers（FFmpeg WASM 必需）
   server: {
+    port: 5180, // 默认 5180
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp'

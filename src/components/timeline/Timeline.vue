@@ -2,6 +2,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
+import ClipThumbnails from './ClipThumbnails.vue'
+import ClipWaveform from './ClipWaveform.vue'
 import type { Track, Clip } from '@/types'
 
 const timelineStore = useTimelineStore()
@@ -34,6 +36,16 @@ const dragStartY = ref(0)
 const dragStartTime = ref(0)
 const dragSourceTrack = ref<Track | null>(null)
 const trackHeight = 48 // 轨道高度与 CSS .track-row 保持一致
+
+// 裁剪拖拽状态
+const isTrimmingClip = ref(false)
+const trimmingClipId = ref<string | null>(null)
+const trimSide = ref<'left' | 'right'>('left')
+const trimStartX = ref(0)
+const trimStartInPoint = ref(0)
+const trimStartOutPoint = ref(0)
+const trimStartTime = ref(0)
+const trimStartDuration = ref(0)
 
 // 时间刻度标记
 const timeMarkers = computed(() => {
@@ -177,6 +189,89 @@ function stopClipDrag(e: MouseEvent) {
 // 点击片段选中
 function selectClip(clip: Clip) {
   timelineStore.selectClip(clip.id)
+}
+
+// ==================== 裁剪功能 ====================
+
+// 开始裁剪拖拽
+function startTrimDrag(e: MouseEvent, clip: Clip, side: 'left' | 'right') {
+  e.preventDefault()
+  e.stopPropagation()
+  
+  const track = timelineStore.tracks.find(t => t.clips.some(c => c.id === clip.id))
+  if (track?.locked) return
+  
+  isTrimmingClip.value = true
+  trimmingClipId.value = clip.id
+  trimSide.value = side
+  trimStartX.value = e.clientX
+  trimStartInPoint.value = clip.inPoint
+  trimStartOutPoint.value = clip.outPoint
+  trimStartTime.value = clip.startTime
+  trimStartDuration.value = clip.duration
+  
+  timelineStore.selectClip(clip.id)
+  
+  document.addEventListener('mousemove', handleTrimDrag)
+  document.addEventListener('mouseup', stopTrimDrag)
+}
+
+// 处理裁剪拖拽
+function handleTrimDrag(e: MouseEvent) {
+  if (!isTrimmingClip.value || !trimmingClipId.value) return
+  
+  const deltaX = e.clientX - trimStartX.value
+  const deltaTime = deltaX / pixelsPerSecond.value
+  
+  // 获取素材信息
+  const clip = timelineStore.tracks
+    .flatMap(t => t.clips)
+    .find(c => c.id === trimmingClipId.value)
+  if (!clip) return
+  
+  const material = clip.materialId ? resourceStore.getMaterial(clip.materialId) : null
+  const materialDuration = material?.duration ?? clip.duration + clip.inPoint
+  
+  if (trimSide.value === 'left') {
+    // 左侧裁剪：调整 inPoint 和 startTime
+    const newInPoint = Math.max(0, trimStartInPoint.value + deltaTime)
+    const maxInPoint = trimStartOutPoint.value - 0.1 // 至少保留 0.1 秒
+    const clampedInPoint = Math.min(newInPoint, maxInPoint)
+    
+    const inPointDelta = clampedInPoint - trimStartInPoint.value
+    const newStartTime = Math.max(0, trimStartTime.value + inPointDelta)
+    const newDuration = trimStartDuration.value - inPointDelta
+    
+    if (newDuration > 0.1) {
+      timelineStore.updateClip(trimmingClipId.value, {
+        inPoint: clampedInPoint,
+        startTime: newStartTime,
+        duration: newDuration
+      })
+    }
+  } else {
+    // 右侧裁剪：调整 outPoint 和 duration
+    const newOutPoint = Math.min(materialDuration, trimStartOutPoint.value + deltaTime)
+    const minOutPoint = trimStartInPoint.value + 0.1 // 至少保留 0.1 秒
+    const clampedOutPoint = Math.max(newOutPoint, minOutPoint)
+    
+    const newDuration = clampedOutPoint - trimStartInPoint.value
+    
+    if (newDuration > 0.1) {
+      timelineStore.updateClip(trimmingClipId.value, {
+        outPoint: clampedOutPoint,
+        duration: newDuration
+      })
+    }
+  }
+}
+
+// 停止裁剪拖拽
+function stopTrimDrag() {
+  isTrimmingClip.value = false
+  trimmingClipId.value = null
+  document.removeEventListener('mousemove', handleTrimDrag)
+  document.removeEventListener('mouseup', stopTrimDrag)
 }
 
 // 删除片段
@@ -434,7 +529,8 @@ onUnmounted(() => {
               class="clip"
               :class="{ 
                 selected: timelineStore.selectedClipId === clip.id,
-                dragging: draggingClipId === clip.id
+                dragging: draggingClipId === clip.id,
+                trimming: trimmingClipId === clip.id
               }"
               :style="{
                 left: `${clip.startTime * pixelsPerSecond}px`,
@@ -444,6 +540,30 @@ onUnmounted(() => {
               @click="selectClip(clip)"
               @mousedown="startClipDrag($event, clip, track)"
             >
+              <!-- 帧预览（仅视频轨道） -->
+              <ClipThumbnails 
+                v-if="track.type === 'video'"
+                :clip="clip"
+                :pixels-per-second="pixelsPerSecond"
+              />
+              
+              <!-- 波形预览（音频轨道） -->
+              <ClipWaveform 
+                v-if="track.type === 'audio'"
+                :clip="clip"
+                :pixels-per-second="pixelsPerSecond"
+              />
+              
+              <!-- 裁剪手柄 -->
+              <div 
+                class="trim-handle left"
+                @mousedown.stop="startTrimDrag($event, clip, 'left')"
+              />
+              <div 
+                class="trim-handle right"
+                @mousedown.stop="startTrimDrag($event, clip, 'right')"
+              />
+              
               <span class="clip-name">{{ getClipName(clip) }}</span>
               <button 
                 class="clip-delete"
@@ -749,6 +869,51 @@ onUnmounted(() => {
 
 .clip-delete:hover {
   background: var(--error);
+}
+
+/* 裁剪手柄 */
+.trim-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: ew-resize;
+  z-index: 10;
+  transition: background var(--transition-fast);
+}
+
+.trim-handle.left {
+  left: 0;
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.trim-handle.right {
+  right: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.trim-handle:hover,
+.clip.trimming .trim-handle {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.trim-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.trim-handle:hover::after,
+.clip.trimming .trim-handle::after {
+  opacity: 1;
 }
 
 /* 播放头 */

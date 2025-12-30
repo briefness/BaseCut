@@ -1,0 +1,221 @@
+<script setup lang="ts">
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { waveformExtractor } from '@/utils/WaveformExtractor'
+import { useResourceStore } from '@/stores/resource'
+import type { Clip } from '@/types'
+
+// Props
+interface Props {
+  clip: Clip
+  pixelsPerSecond: number
+}
+
+const props = defineProps<Props>()
+
+const resourceStore = useResourceStore()
+
+// 波形数据
+const waveformPeaks = ref<number[]>([])
+const isLoading = ref(false)
+const containerRef = ref<HTMLElement | null>(null)
+const canvasRef = ref<HTMLCanvasElement | null>(null)
+
+// 获取素材
+const material = computed(() => {
+  if (!props.clip.materialId) return null
+  return resourceStore.getMaterial(props.clip.materialId)
+})
+
+// 计算片段显示宽度（像素）
+const clipWidth = computed(() => {
+  return props.clip.duration * props.pixelsPerSecond
+})
+
+// 原始波形数据（完整）
+let fullWaveform: number[] = []
+let fullDuration: number = 0
+
+// 提取波形
+async function extractWaveform() {
+  if (!material.value) return
+  if (material.value.type !== 'audio' && material.value.type !== 'video') return
+  if (isLoading.value) return
+  
+  isLoading.value = true
+  
+  try {
+    // 提取完整波形
+    fullWaveform = await waveformExtractor.extractWaveform(
+      material.value.blobUrl,
+      material.value.id,
+      { samplesPerSecond: 100 }
+    )
+    fullDuration = material.value.duration || 0
+    
+    // 更新显示
+    updateDisplayWaveform()
+  } catch (err) {
+    console.error('[ClipWaveform] 波形提取失败:', err)
+    waveformPeaks.value = []
+  } finally {
+    isLoading.value = false
+  }
+}
+
+// 更新显示的波形（根据 inPoint/outPoint 裁剪）
+function updateDisplayWaveform() {
+  if (fullWaveform.length === 0 || fullDuration <= 0) {
+    waveformPeaks.value = []
+    return
+  }
+  
+  // 计算需要显示的采样点数（每像素约 1 个采样点）
+  const targetSamples = Math.ceil(clipWidth.value)
+  
+  // 获取指定范围的波形
+  waveformPeaks.value = waveformExtractor.getWaveformSlice(
+    fullWaveform,
+    fullDuration,
+    props.clip.inPoint,
+    props.clip.outPoint,
+    targetSamples
+  )
+  
+  // 绘制波形
+  drawWaveform()
+}
+
+// 绘制波形到 Canvas
+function drawWaveform() {
+  const canvas = canvasRef.value
+  if (!canvas) return
+  
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  
+  const peaks = waveformPeaks.value
+  const width = Math.ceil(clipWidth.value)
+  const height = 40 // 轨道高度
+  
+  // 设置 Canvas 尺寸
+  canvas.width = width
+  canvas.height = height
+  
+  // 清空画布
+  ctx.clearRect(0, 0, width, height)
+  
+  if (peaks.length === 0) return
+  
+  // 绘制波形
+  const barWidth = Math.max(1, width / peaks.length)
+  const centerY = height / 2
+  
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+  
+  for (let i = 0; i < peaks.length; i++) {
+    const peak = peaks[i]
+    const barHeight = Math.max(2, peak * height * 0.9) // 最小高度 2px
+    const x = i * barWidth
+    const y = centerY - barHeight / 2
+    
+    ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight)
+  }
+}
+
+// IntersectionObserver 懒加载
+let observer: IntersectionObserver | null = null
+
+onMounted(() => {
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries[0].isIntersecting && waveformPeaks.value.length === 0) {
+        extractWaveform()
+      }
+    },
+    { threshold: 0.1 }
+  )
+  
+  if (containerRef.value) {
+    observer.observe(containerRef.value)
+  }
+})
+
+onUnmounted(() => {
+  observer?.disconnect()
+})
+
+// 监听裁剪变化更新波形显示
+let debounceTimer: number | null = null
+
+watch(
+  () => [props.clip.inPoint, props.clip.outPoint, props.clip.duration, clipWidth.value],
+  () => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    debounceTimer = window.setTimeout(() => {
+      updateDisplayWaveform()
+    }, 300)
+  }
+)
+
+// 监听宽度变化重绘
+watch(clipWidth, () => {
+  if (waveformPeaks.value.length > 0) {
+    drawWaveform()
+  }
+})
+</script>
+
+<template>
+  <div ref="containerRef" class="clip-waveform">
+    <canvas ref="canvasRef" class="waveform-canvas" />
+    
+    <!-- 加载中状态 -->
+    <div v-if="isLoading" class="loading">
+      <span class="loading-spinner"></span>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.clip-waveform {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.waveform-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+</style>
