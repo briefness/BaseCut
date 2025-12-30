@@ -32,6 +32,11 @@ class FrameExtractor {
   private filmstripPending: Map<string, Promise<FilmstripCache>> = new Map()
   private maxFilmstrips = 10  // 最多缓存 10 个素材的胶卷
   
+  // 全局队列控制 - 限制同时提取胶卷的数量
+  private filmstripQueue: Array<() => Promise<void>> = []
+  private activeFilmstripCount = 0
+  private maxConcurrentFilmstrips = 1  // 同时只提取 1 个素材的胶卷
+  
   constructor(maxCacheSize = 100) {
     this.maxCacheSize = maxCacheSize
   }
@@ -211,11 +216,11 @@ class FrameExtractor {
         reject(new Error('Failed to load video for frame extraction'))
       }
       
-      // 设置超时（10秒）
+      // 设置超时（30秒，适应多视频并发场景）
       timeoutId = window.setTimeout(() => {
         cleanup()
         reject(new Error('Frame extraction timeout'))
-      }, 10000)
+      }, 30000)
       
       tempVideo.addEventListener('loadeddata', handleLoaded, { once: true })
       tempVideo.addEventListener('error', handleError, { once: true })
@@ -264,8 +269,8 @@ class FrameExtractor {
       }
     }
     
-    // 并行提取，但限制并发数
-    const concurrency = 3
+    // 并行提取，但限制并发数（降低以避免卡顿）
+    const concurrency = 2
     const results: string[] = []
     
     for (let i = 0; i < times.length; i += concurrency) {
@@ -281,6 +286,7 @@ class FrameExtractor {
 
   /**
    * 获取素材胶卷（预提取整个视频的帧序列）
+   * 使用队列控制，同时只提取一个素材，避免性能问题
    * @param interval 帧间隔（秒），默认 0.5 秒一帧
    */
   async getFilmstrip(
@@ -289,7 +295,7 @@ class FrameExtractor {
     duration: number,
     options: ExtractOptions & { interval?: number } = {}
   ): Promise<FilmstripCache> {
-    const { interval = 0.5, ...extractOptions } = options
+    const { interval = 1, ...extractOptions } = options  // 默认 1 秒一帧，减少资源消耗
     
     // 检查缓存
     const cached = this.filmstrips.get(materialId)
@@ -302,15 +308,46 @@ class FrameExtractor {
     const pending = this.filmstripPending.get(materialId)
     if (pending) return pending
     
-    // 创建新的提取请求
-    const extractPromise = this.doExtractFilmstrip(video, materialId, duration, interval, extractOptions)
-    this.filmstripPending.set(materialId, extractPromise)
+    // 创建带队列控制的提取请求
+    const extractPromise = new Promise<FilmstripCache>((resolve, reject) => {
+      const doExtract = async () => {
+        this.activeFilmstripCount++
+        try {
+          const result = await this.doExtractFilmstrip(video, materialId, duration, interval, extractOptions)
+          resolve(result)
+        } catch (err) {
+          reject(err)
+        } finally {
+          this.activeFilmstripCount--
+          this.filmstripPending.delete(materialId)
+          this.processFilmstripQueue()
+        }
+      }
+      
+      if (this.activeFilmstripCount < this.maxConcurrentFilmstrips) {
+        doExtract()
+      } else {
+        // 加入队列等待
+        this.filmstripQueue.push(doExtract)
+      }
+    })
     
-    try {
-      const result = await extractPromise
-      return result
-    } finally {
-      this.filmstripPending.delete(materialId)
+    this.filmstripPending.set(materialId, extractPromise)
+    return extractPromise
+  }
+
+  /**
+   * 处理胶卷提取队列
+   */
+  private processFilmstripQueue(): void {
+    while (
+      this.activeFilmstripCount < this.maxConcurrentFilmstrips &&
+      this.filmstripQueue.length > 0
+    ) {
+      const next = this.filmstripQueue.shift()
+      if (next) {
+        next()
+      }
     }
   }
 
@@ -367,6 +404,7 @@ class FrameExtractor {
 
   /**
    * 从胶卷中切片获取指定范围的帧
+   * 始终返回 targetCount 个帧，不足时复用，过多时采样
    */
   getFilmstripSlice(
     filmstrip: { frames: string[]; interval: number; duration: number },
@@ -375,7 +413,7 @@ class FrameExtractor {
     targetCount: number
   ): string[] {
     const { frames, interval, duration } = filmstrip
-    if (frames.length === 0 || duration <= 0) return []
+    if (frames.length === 0 || duration <= 0 || targetCount <= 0) return []
     
     // 计算起始和结束帧索引
     const startIndex = Math.floor(inPoint / interval)
@@ -387,18 +425,27 @@ class FrameExtractor {
       Math.min(frames.length, endIndex)
     )
     
-    // 如果目标数量与切片数量差异较大，进行均匀采样
-    if (sliceFrames.length > targetCount * 1.5) {
-      const step = sliceFrames.length / targetCount
-      const sampled: string[] = []
-      for (let i = 0; i < targetCount; i++) {
-        const index = Math.min(Math.floor(i * step), sliceFrames.length - 1)
-        sampled.push(sliceFrames[index])
-      }
-      return sampled
+    // 如果没有帧，返回第一帧填满
+    if (sliceFrames.length === 0 && frames.length > 0) {
+      const fallbackFrame = frames[Math.min(startIndex, frames.length - 1)] || frames[0]
+      return Array(targetCount).fill(fallbackFrame)
     }
     
-    return sliceFrames
+    // 如果只有一帧，复制填满
+    if (sliceFrames.length === 1) {
+      return Array(targetCount).fill(sliceFrames[0])
+    }
+    
+    // 均匀采样或复用以达到 targetCount
+    const result: string[] = []
+    for (let i = 0; i < targetCount; i++) {
+      // 计算在原始帧数组中的位置（均匀分布）
+      const ratio = i / (targetCount - 1 || 1)
+      const index = Math.min(Math.floor(ratio * (sliceFrames.length - 1)), sliceFrames.length - 1)
+      result.push(sliceFrames[index])
+    }
+    
+    return result
   }
 
   /**

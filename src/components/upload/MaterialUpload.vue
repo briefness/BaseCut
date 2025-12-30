@@ -207,6 +207,7 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden; /* 防止内容溢出 */
 }
 
 /* 标签页 */
@@ -284,6 +285,7 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
 /* 素材列表 */
 .material-list {
   flex: 1;
+  min-height: 0; /* 关键：允许 flex 子元素收缩 */
   padding: 8px;
   overflow-y: auto;
   display: grid;
@@ -296,6 +298,7 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
   position: relative;
   background: var(--bg-tertiary);
   border-radius: var(--radius-md);
+  height: 104px;
   overflow: hidden;
   cursor: pointer;
   transition: all var(--transition-fast);

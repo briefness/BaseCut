@@ -84,7 +84,7 @@ async function loadFilmstrip() {
         videoElement,
         material.value.id,
         material.value.duration || 0,
-        { width: 120, quality: 0.7, interval: 0.5 }
+        { width: 120, quality: 0.7, interval: 1 }
       )
       filmstripCache = filmstrip
       updateFramesFromFilmstrip()
@@ -135,7 +135,7 @@ async function loadFilmstrip() {
       videoElement,
       material.value.id,
       material.value.duration || videoElement.duration,
-      { width: 120, quality: 0.7, interval: 0.5 }
+      { width: 120, quality: 0.7, interval: 1 }
     )
     
     filmstripCache = filmstrip
