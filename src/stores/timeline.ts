@@ -16,6 +16,10 @@ export const useTimelineStore = defineStore('timeline', () => {
   const volume = ref(1)
   const playbackRate = ref(1)
   const zoom = ref(1) // 时间线缩放比例
+  
+  // 拖拽预览状态
+  const isSeeking = ref(false)      // 是否正在拖动时间轴
+  const seekingTime = ref(0)        // 拖动时的预览时间点
 
   // ==================== 计算属性 ====================
   const videoTracks = computed(() => 
@@ -298,6 +302,35 @@ export const useTimelineStore = defineStore('timeline', () => {
     zoom.value = Math.max(0.1, Math.min(10, z))
   }
 
+  // ==================== 拖拽预览控制 ====================
+
+  /**
+   * 开始拖拽预览
+   */
+  function startSeeking(): void {
+    isSeeking.value = true
+    seekingTime.value = currentTime.value
+  }
+
+  /**
+   * 更新拖拽预览时间（不触发实际 seek）
+   */
+  function updateSeekingTime(time: number): void {
+    if (isSeeking.value) {
+      seekingTime.value = Math.max(0, Math.min(time, duration.value))
+    }
+  }
+
+  /**
+   * 结束拖拽，执行实际 seek
+   */
+  function stopSeeking(): void {
+    if (isSeeking.value) {
+      currentTime.value = seekingTime.value
+      isSeeking.value = false
+    }
+  }
+
   // ==================== 工具方法 ====================
 
   /**
@@ -356,6 +389,8 @@ export const useTimelineStore = defineStore('timeline', () => {
     volume,
     playbackRate,
     zoom,
+    isSeeking,
+    seekingTime,
     // 计算属性
     videoTracks,
     audioTracks,
@@ -383,6 +418,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     setVolume,
     setPlaybackRate,
     setZoom,
+    // 拖拽预览控制
+    startSeeking,
+    updateSeekingTime,
+    stopSeeking,
     // 工具方法
     getActiveClips,
     reset

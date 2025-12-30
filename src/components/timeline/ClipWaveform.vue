@@ -35,7 +35,7 @@ const clipWidth = computed(() => {
 let fullWaveform: number[] = []
 let fullDuration: number = 0
 
-// 提取波形
+// 提取波形（支持远程和本地两种模式）
 async function extractWaveform() {
   if (!material.value) return
   if (material.value.type !== 'audio' && material.value.type !== 'video') return
@@ -44,13 +44,12 @@ async function extractWaveform() {
   isLoading.value = true
   
   try {
-    // 提取完整波形
-    fullWaveform = await waveformExtractor.extractWaveform(
-      material.value.blobUrl,
-      material.value.id,
-      { samplesPerSecond: 100 }
-    )
-    fullDuration = material.value.duration || 0
+    // 优先使用远程波形数据
+    if (material.value.waveformUrl) {
+      await loadRemoteWaveform()
+    } else if (material.value.blobUrl) {
+      await loadLocalWaveform()
+    }
     
     // 更新显示
     updateDisplayWaveform()
@@ -60,6 +59,41 @@ async function extractWaveform() {
   } finally {
     isLoading.value = false
   }
+}
+
+// 从远程 URL 加载波形数据
+async function loadRemoteWaveform() {
+  if (!material.value?.waveformUrl) return
+  
+  const response = await fetch(material.value.waveformUrl)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch waveform: ${response.status}`)
+  }
+  
+  const data = await response.json()
+  
+  // 支持多种格式：直接数组或包含 peaks 字段的对象
+  if (Array.isArray(data)) {
+    fullWaveform = data
+  } else if (data.peaks && Array.isArray(data.peaks)) {
+    fullWaveform = data.peaks
+  } else {
+    throw new Error('Invalid waveform data format')
+  }
+  
+  fullDuration = material.value.duration || 0
+}
+
+// 本地提取波形
+async function loadLocalWaveform() {
+  if (!material.value?.blobUrl) return
+  
+  fullWaveform = await waveformExtractor.extractWaveform(
+    material.value.blobUrl,
+    material.value.id,
+    { samplesPerSecond: 100 }
+  )
+  fullDuration = material.value.duration || 0
 }
 
 // 更新显示的波形（根据 inPoint/outPoint 裁剪）

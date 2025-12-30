@@ -1,19 +1,63 @@
 // ==================== 素材类型 ====================
 export type MaterialType = 'video' | 'audio' | 'image'
 
+// 素材处理状态
+export type MaterialProcessingStatus = 'local' | 'uploading' | 'processing' | 'ready' | 'error'
+
+// HLS 多码率变体
+export interface HlsVariant {
+  resolution: string      // 如 "1080p", "720p"
+  bandwidth: number       // 带宽
+  url: string             // 变体播放列表 URL
+}
+
+// 缩略图 Sprite 配置
+export interface ThumbnailSprite {
+  url: string             // sprite 图片 URL
+  width: number           // 单帧宽度
+  height: number          // 单帧高度
+  columns: number         // 每行帧数
+  interval: number        // 帧间隔（秒）
+  totalFrames: number     // 总帧数
+}
+
+// 关键帧信息（用于精确 seek）
+export interface KeyframeInfo {
+  times: number[]         // 关键帧时间戳列表
+  thumbnails?: string[]   // 关键帧缩略图 URL（可选）
+}
+
 export interface Material {
   id: string
   name: string
   type: MaterialType
-  file: File
-  blobUrl: string
-  hlsUrl?: string           // HLS 播放 URL（转换后）
-  isConverting?: boolean    // 是否正在转换
-  duration?: number  // 视频/音频时长（秒）
-  width?: number     // 视频/图片宽度
-  height?: number    // 视频/图片高度
-  thumbnail?: string // 缩略图 Blob URL
+  file?: File             // 本地模式有值
+  duration?: number       // 视频/音频时长（秒）
+  width?: number          // 视频/图片宽度
+  height?: number         // 视频/图片高度
+  thumbnail?: string      // 封面缩略图 URL
   createdAt: number
+  
+  // === 本地模式 ===
+  blobUrl?: string        // 本地 Blob URL
+  
+  // === 云端模式 ===
+  processingStatus?: MaterialProcessingStatus  // 处理状态
+  processingProgress?: number                  // 处理进度 0-100
+  
+  // HLS 流媒体
+  hlsUrl?: string                // 主播放列表 URL
+  hlsVariants?: HlsVariant[]     // 多码率变体
+  
+  // 预生成缩略图
+  thumbnailSprite?: ThumbnailSprite  // Sprite 缩略图配置
+  keyframes?: KeyframeInfo           // 关键帧信息
+  
+  // 波形数据
+  waveformUrl?: string               // 波形数据 JSON URL
+  
+  // 兼容旧字段
+  isConverting?: boolean   // @deprecated 使用 processingStatus
 }
 
 // ==================== 轨道类型 ====================

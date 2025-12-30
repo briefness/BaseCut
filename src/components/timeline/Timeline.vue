@@ -22,10 +22,11 @@ const timelineWidth = computed(() => {
   return minDuration * pixelsPerSecond.value
 })
 
-// 播放头位置
-const playheadPosition = computed(() => 
-  timelineStore.currentTime * pixelsPerSecond.value
-)
+// 播放头位置（拖拽时使用预览时间）
+const playheadPosition = computed(() => {
+  const time = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+  return time * pixelsPerSecond.value
+})
 
 // 拖拽状态
 const isDraggingPlayhead = ref(false)
@@ -110,6 +111,7 @@ function handleRulerClick(e: MouseEvent) {
 function startPlayheadDrag(e: MouseEvent) {
   e.preventDefault()
   isDraggingPlayhead.value = true
+  timelineStore.startSeeking()  // 通知开始拖拽预览
   document.addEventListener('mousemove', handlePlayheadDrag)
   document.addEventListener('mouseup', stopPlayheadDrag)
 }
@@ -119,11 +121,13 @@ function handlePlayheadDrag(e: MouseEvent) {
   const rect = timelineRef.value.getBoundingClientRect()
   const x = e.clientX - rect.left + timelineRef.value.scrollLeft
   const time = x / pixelsPerSecond.value
-  timelineStore.seek(Math.max(0, Math.min(time, timelineStore.duration)))
+  // 使用预览时间更新，不触发实际 seek
+  timelineStore.updateSeekingTime(Math.max(0, Math.min(time, timelineStore.duration)))
 }
 
 function stopPlayheadDrag() {
   isDraggingPlayhead.value = false
+  timelineStore.stopSeeking()  // 结束拖拽，执行实际 seek
   document.removeEventListener('mousemove', handlePlayheadDrag)
   document.removeEventListener('mouseup', stopPlayheadDrag)
 }

@@ -456,6 +456,13 @@ class FrameExtractor {
   }
   
   /**
+   * 获取已缓存的胶卷数据（用于拖拽预览）
+   */
+  getFilmstripCache(materialId: string): FilmstripCache | null {
+    return this.filmstrips.get(materialId) ?? null
+  }
+  
+  /**
    * 清理指定素材的缓存
    */
   clearCache(materialId?: string): void {

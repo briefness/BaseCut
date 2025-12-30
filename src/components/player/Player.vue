@@ -5,6 +5,7 @@ import { useProjectStore } from '@/stores/project'
 import { useResourceStore } from '@/stores/resource'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 import { HLSPlayer } from '@/engine/HLSPlayer'
+import { frameExtractor } from '@/utils/FrameExtractor'
 
 const timelineStore = useTimelineStore()
 const projectStore = useProjectStore()
@@ -305,6 +306,37 @@ function stopRenderLoop() {
   }
 }
 
+// 缩略图缓存（用于拖拽预览）
+const thumbnailCache = new Map<string, HTMLImageElement>()
+
+// 渲染缩略图帧（拖拽时使用）
+function renderThumbnailFrame(frameUrl: string, cacheKey: string) {
+  if (!renderer) return
+  
+  // 检查缓存
+  const cached = thumbnailCache.get(cacheKey)
+  if (cached && cached.complete) {
+    renderer.renderFrame(cached)
+    return
+  }
+  
+  // 检查是否已在加载
+  if (cached) return
+  
+  // 加载新图片
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  thumbnailCache.set(cacheKey, img)
+  
+  img.onload = () => {
+    if (renderer && timelineStore.isSeeking) {
+      renderer.renderFrame(img)
+    }
+  }
+  
+  img.src = frameUrl
+}
+
 // 渲染当前帧
 function renderCurrentFrame() {
   if (!renderer || !videoElement) return
@@ -312,8 +344,13 @@ function renderCurrentFrame() {
   // 同步音量
   videoElement.volume = timelineStore.volume
   
+  // 获取渲染时间点（拖拽时使用预览时间）
+  const renderTime = timelineStore.isSeeking 
+    ? timelineStore.seekingTime 
+    : timelineStore.currentTime
+  
   // 获取当前时间点的所有活跃片段
-  const activeClips = timelineStore.getActiveClips(timelineStore.currentTime)
+  const activeClips = timelineStore.getActiveClips(renderTime)
   
   // 找到视频片段
   const videoClip = activeClips.find(c => {
@@ -337,11 +374,39 @@ function renderCurrentFrame() {
   if (videoClip && videoClip.materialId) {
     const material = resourceStore.getMaterial(videoClip.materialId)
     if (material && material.type === 'video') {
-      const clipTime = timelineStore.currentTime - videoClip.startTime + videoClip.inPoint
-      const videoUrl = material.hlsUrl ?? material.blobUrl
+      // 使用 renderTime 计算片段内时间
+      const clipTime = renderTime - videoClip.startTime + videoClip.inPoint
+      const videoUrl = material.hlsUrl ?? material.blobUrl ?? ''
       
+      // 拖拽时：使用预生成的缩略图实现实时预览（不卡顿）
+      if (timelineStore.isSeeking) {
+        // 暂停视频播放
+        if (videoElement && !videoElement.paused) {
+          videoElement.pause()
+        }
+        
+        // 从 filmstrip 获取最近的缩略图
+        const filmstrip = frameExtractor.getFilmstripCache(material.id)
+        if (filmstrip && filmstrip.frames.length > 0) {
+          // 计算帧索引
+          const frameIndex = Math.min(
+            Math.floor(clipTime / filmstrip.interval),
+            filmstrip.frames.length - 1
+          )
+          const frameUrl = filmstrip.frames[Math.max(0, frameIndex)]
+          
+          // 使用缓存的图片渲染
+          renderThumbnailFrame(frameUrl, material.id + '_' + frameIndex)
+        } else if (videoElement && videoElement.readyState >= 2) {
+          // 没有缩略图时使用视频当前帧
+          renderer.renderFrame(videoElement)
+        }
+        return
+      }
+      
+      // 正常播放时的渲染逻辑
       const currentSrc = hlsPlayer?.getCurrentSource() ?? videoElement.src
-      if (currentSrc !== videoUrl) {
+      if (currentSrc !== videoUrl && videoUrl) {
         loadVideoSource(videoUrl)
       }
       
@@ -352,9 +417,7 @@ function renderCurrentFrame() {
       }
       
       if (timelineStore.isPlaying && videoElement.paused) {
-        videoElement.play().catch(() => {
-          // 忽略 AbortError：play() 被 load() 或 pause() 中断是正常行为
-        })
+        videoElement.play().catch(() => {})
       } else if (!timelineStore.isPlaying && !videoElement.paused) {
         videoElement.pause()
       }
@@ -376,7 +439,7 @@ function renderCurrentFrame() {
           imageCache.set(material.id, img)
           if (renderer) renderer.renderFrame(img)
         }
-        img.src = material.blobUrl
+        img.src = material.blobUrl || ''
         imageCache.set(material.id, img) // 标记为加载中
       } else {
         const img = imageCache.get(material.id)
@@ -401,7 +464,7 @@ function renderCurrentFrame() {
       // 检查是否需要加载新的音频源
       if (currentAudioMaterialId !== audioClip.materialId) {
         console.log('[Player] 加载音频素材:', material.name)
-        audioElement.src = material.blobUrl
+        audioElement.src = material.blobUrl || ''
         currentAudioMaterialId = audioClip.materialId
         audioElement.load()
         // 加载新源后需要设置初始时间
@@ -446,8 +509,8 @@ watch(activeVideoClip, (newClip, oldClip) => {
     if (newClip?.materialId) {
       const material = resourceStore.getMaterial(newClip.materialId)
       if (material) {
-        const videoUrl = material.hlsUrl ?? material.blobUrl
-        loadVideoSource(videoUrl)
+        const videoUrl = material.hlsUrl ?? material.blobUrl ?? ''
+        if (videoUrl) loadVideoSource(videoUrl)
       }
     }
   }

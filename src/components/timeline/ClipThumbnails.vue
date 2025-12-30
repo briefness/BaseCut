@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { frameExtractor } from '@/utils/FrameExtractor'
+import { spriteThumbnailer, type FramePosition } from '@/utils/SpriteThumbnailer'
 import { useResourceStore } from '@/stores/resource'
 import type { Clip } from '@/types'
 
@@ -11,77 +12,80 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-
 const resourceStore = useResourceStore()
 
-// 帧列表
-const frames = ref<string[]>([])
+// 状态
+const frames = ref<string[]>([])              // 本地模式帧列表
+const spriteFrames = ref<FramePosition[]>([]) // Sprite 模式帧位置
 const isLoading = ref(false)
 const containerRef = ref<HTMLElement | null>(null)
 
-// 胶卷缓存引用
+// 胶卷缓存（本地模式）
 let filmstripCache: { frames: string[]; interval: number; duration: number } | null = null
+let videoElement: HTMLVideoElement | null = null
 
-// 获取素材
+// 计算属性
 const material = computed(() => {
   if (!props.clip.materialId) return null
   return resourceStore.getMaterial(props.clip.materialId)
 })
 
-// 计算片段总宽度（像素）
-const clipWidth = computed(() => {
-  return props.clip.duration * props.pixelsPerSecond
-})
+const useSpriteMode = computed(() => !!material.value?.thumbnailSprite)
 
-// 计算理想帧宽度（基于轨道高度和视频宽高比）
-const trackHeight = 40 // 轨道高度
+const clipWidth = computed(() => props.clip.duration * props.pixelsPerSecond)
+
+const trackHeight = 40
 const idealFrameWidth = computed(() => {
   if (!material.value) return 60
   const aspectRatio = (material.value.width || 16) / (material.value.height || 9)
   return Math.round(trackHeight * aspectRatio)
 })
 
-// 计算需要显示的帧数（确保铺满，但限制最大数量）
-const MAX_FRAMES = 50 // 性能保护：最多 50 帧
+const MAX_FRAMES = 50
 const frameCount = computed(() => {
   const count = Math.max(1, Math.ceil(clipWidth.value / idealFrameWidth.value))
   return Math.min(count, MAX_FRAMES)
 })
 
-// 实际每帧显示宽度（确保铺满整个片段无留白）
-const frameWidth = computed(() => {
-  return clipWidth.value / frameCount.value
-})
+const frameWidth = computed(() => clipWidth.value / frameCount.value)
 
-// 视频元素引用
-let videoElement: HTMLVideoElement | null = null
+// ========== Sprite 模式 ==========
+function loadFromSprite() {
+  if (!material.value?.thumbnailSprite) return
+  
+  spriteFrames.value = spriteThumbnailer.getFramesInRange(
+    material.value.thumbnailSprite,
+    props.clip.inPoint,
+    props.clip.outPoint,
+    frameCount.value
+  )
+}
 
-// 加载素材胶卷
+function updateSpriteFrames() {
+  if (!useSpriteMode.value || !material.value?.thumbnailSprite) return
+  loadFromSprite()
+}
+
+// ========== 本地模式 ==========
 async function loadFilmstrip() {
   if (!material.value || material.value.type !== 'video') return
-  if (isLoading.value) return
+  if (!material.value.blobUrl) return
   
-  // 如果已有胶卷缓存，直接切片显示
+  // 已有缓存，直接切片
   if (filmstripCache) {
     updateFramesFromFilmstrip()
     return
   }
   
-  // 检查 FrameExtractor 是否已有该素材的胶卷
+  // 检查 FrameExtractor 缓存
   if (frameExtractor.hasFilmstrip(material.value.id)) {
-    // 从 FrameExtractor 获取已缓存的胶卷
     isLoading.value = true
     try {
-      if (!videoElement) {
-        videoElement = document.createElement('video')
-        videoElement.crossOrigin = 'anonymous'
-        videoElement.preload = 'metadata'
-        videoElement.muted = true
-      }
-      videoElement.src = material.value.blobUrl
+      ensureVideoElement()
+      videoElement!.src = material.value.blobUrl
       
       const filmstrip = await frameExtractor.getFilmstrip(
-        videoElement,
+        videoElement!,
         material.value.id,
         material.value.duration || 0,
         { width: 120, quality: 0.7, interval: 1 }
@@ -96,48 +100,20 @@ async function loadFilmstrip() {
     return
   }
   
-  // 首次加载：提取整个素材的胶卷
+  // 首次提取
   isLoading.value = true
-  
   try {
-    if (!videoElement) {
-      videoElement = document.createElement('video')
-      videoElement.crossOrigin = 'anonymous'
-      videoElement.preload = 'metadata'
-      videoElement.muted = true
-    }
+    ensureVideoElement()
+    videoElement!.src = material.value.blobUrl
     
-    videoElement.src = material.value.blobUrl
+    await waitForVideoLoad()
     
-    // 等待视频元数据加载
-    await new Promise<void>((resolve, reject) => {
-      const onLoaded = () => {
-        videoElement!.removeEventListener('loadedmetadata', onLoaded)
-        videoElement!.removeEventListener('error', onError)
-        resolve()
-      }
-      const onError = () => {
-        videoElement!.removeEventListener('loadedmetadata', onLoaded)
-        videoElement!.removeEventListener('error', onError)
-        reject(new Error('Failed to load video'))
-      }
-      
-      if (videoElement!.readyState >= 1) {
-        resolve()
-      } else {
-        videoElement!.addEventListener('loadedmetadata', onLoaded)
-        videoElement!.addEventListener('error', onError)
-      }
-    })
-    
-    // 获取素材胶卷（会自动缓存）
     const filmstrip = await frameExtractor.getFilmstrip(
-      videoElement,
+      videoElement!,
       material.value.id,
-      material.value.duration || videoElement.duration,
+      material.value.duration || videoElement!.duration,
       { width: 120, quality: 0.7, interval: 1 }
     )
-    
     filmstripCache = filmstrip
     updateFramesFromFilmstrip()
   } catch (err) {
@@ -148,14 +124,42 @@ async function loadFilmstrip() {
   }
 }
 
-// 从胶卷切片更新显示的帧
+function ensureVideoElement() {
+  if (!videoElement) {
+    videoElement = document.createElement('video')
+    videoElement.crossOrigin = 'anonymous'
+    videoElement.preload = 'metadata'
+    videoElement.muted = true
+  }
+}
+
+function waitForVideoLoad(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onLoaded = () => {
+      videoElement!.removeEventListener('loadedmetadata', onLoaded)
+      videoElement!.removeEventListener('error', onError)
+      resolve()
+    }
+    const onError = () => {
+      videoElement!.removeEventListener('loadedmetadata', onLoaded)
+      videoElement!.removeEventListener('error', onError)
+      reject(new Error('Failed to load video'))
+    }
+    
+    if (videoElement!.readyState >= 1) {
+      resolve()
+    } else {
+      videoElement!.addEventListener('loadedmetadata', onLoaded)
+      videoElement!.addEventListener('error', onError)
+    }
+  })
+}
+
 function updateFramesFromFilmstrip() {
   if (!filmstripCache) {
     frames.value = []
     return
   }
-  
-  // 从胶卷中切片获取当前范围的帧
   frames.value = frameExtractor.getFilmstripSlice(
     filmstripCache,
     props.clip.inPoint,
@@ -164,19 +168,31 @@ function updateFramesFromFilmstrip() {
   )
 }
 
-// IntersectionObserver 懒加载
+// ========== 统一入口 ==========
+async function loadThumbnails() {
+  if (!material.value || material.value.type !== 'video') return
+  if (isLoading.value) return
+  
+  if (useSpriteMode.value) {
+    loadFromSprite()
+  } else {
+    await loadFilmstrip()
+  }
+}
+
+// ========== 生命周期 ==========
 let observer: IntersectionObserver | null = null
 
 onMounted(() => {
   observer = new IntersectionObserver(
     (entries) => {
-      if (entries[0].isIntersecting && frames.value.length === 0) {
-        loadFilmstrip()
+      const hasFrames = frames.value.length > 0 || spriteFrames.value.length > 0
+      if (entries[0].isIntersecting && !hasFrames) {
+        loadThumbnails()
       }
     },
     { threshold: 0.1 }
   )
-  
   if (containerRef.value) {
     observer.observe(containerRef.value)
   }
@@ -190,12 +206,13 @@ onUnmounted(() => {
   }
 })
 
-// 监听裁剪变化 - 直接从胶卷切片，无需重新提取
+// 监听裁剪变化
 watch(
   () => [props.clip.inPoint, props.clip.outPoint, frameCount.value],
   () => {
-    // 如果已有胶卷，直接切片更新（瞬间完成）
-    if (filmstripCache) {
+    if (useSpriteMode.value) {
+      updateSpriteFrames()
+    } else if (filmstripCache) {
       updateFramesFromFilmstrip()
     }
   }
@@ -204,10 +221,26 @@ watch(
 
 <template>
   <div ref="containerRef" class="clip-thumbnails">
-    <!-- 帧图片 -->
+    <!-- Sprite 模式帧 -->
     <div 
+      v-if="useSpriteMode && spriteFrames.length > 0"
+      v-for="(pos, index) in spriteFrames"
+      :key="`sprite-${index}`"
+      class="frame"
+      :style="{ 
+        backgroundImage: `url(${pos.spriteUrl})`,
+        backgroundPosition: `-${pos.x}px -${pos.y}px`,
+        backgroundSize: 'auto',
+        width: `${frameWidth}px`,
+        flexShrink: 0
+      }"
+    />
+    
+    <!-- 本地模式帧 -->
+    <div 
+      v-else-if="frames.length > 0"
       v-for="(frame, index) in frames"
-      :key="index"
+      :key="`local-${index}`"
       class="frame"
       :style="{ 
         backgroundImage: `url(${frame})`,
@@ -217,13 +250,13 @@ watch(
     />
     
     <!-- 加载中状态 -->
-    <div v-if="isLoading && frames.length === 0" class="loading">
+    <div v-if="isLoading && frames.length === 0 && spriteFrames.length === 0" class="loading">
       <span class="loading-spinner"></span>
     </div>
     
     <!-- 空状态占位 -->
     <div 
-      v-if="!isLoading && frames.length === 0" 
+      v-if="!isLoading && frames.length === 0 && spriteFrames.length === 0" 
       class="placeholder"
     />
   </div>
