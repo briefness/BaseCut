@@ -352,7 +352,9 @@ function renderCurrentFrame() {
       }
       
       if (timelineStore.isPlaying && videoElement.paused) {
-        videoElement.play()
+        videoElement.play().catch(() => {
+          // 忽略 AbortError：play() 被 load() 或 pause() 中断是正常行为
+        })
       } else if (!timelineStore.isPlaying && !videoElement.paused) {
         videoElement.pause()
       }

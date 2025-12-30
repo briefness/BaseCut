@@ -20,6 +20,26 @@ export interface ExtractAudioOptions {
   bitrate?: string
 }
 
+// 导出片段信息
+export interface ExportClip {
+  file: File              // 视频文件
+  startTime: number       // 片段在时间线上的开始时间（秒）
+  duration: number        // 片段时长（秒）
+  inPoint: number         // 素材入点（秒）
+  outPoint: number        // 素材出点（秒）
+}
+
+// 导出选项
+export interface ExportOptions {
+  clips: ExportClip[]           // 要导出的片段列表
+  outputFormat: 'mp4' | 'webm'  // 输出格式
+  width?: number                // 输出宽度
+  height?: number               // 输出高度
+  videoBitrate?: string         // 视频码率，如 '5M'
+  audioBitrate?: string         // 音频码率，如 '192k'
+  frameRate?: number            // 帧率
+}
+
 export class FFmpegCore {
   private ffmpeg: FFmpeg | null = null
   private loaded = false
@@ -138,7 +158,7 @@ export class FFmpegCore {
     await this.ffmpeg.deleteFile(inputName)
     await this.ffmpeg.deleteFile(outputName)
 
-    return new Blob([data], { type: this.getMimeType(options.outputFormat) })
+    return new Blob([data as BlobPart], { type: this.getMimeType(options.outputFormat) })
   }
 
   /**
@@ -168,7 +188,7 @@ export class FFmpegCore {
     await this.ffmpeg.deleteFile(inputName)
     await this.ffmpeg.deleteFile(outputName)
 
-    return new Blob([data], { type: this.getMimeType(options.outputFormat) })
+    return new Blob([data as BlobPart], { type: this.getMimeType(options.outputFormat) })
   }
 
   /**
@@ -204,7 +224,7 @@ export class FFmpegCore {
       await this.ffmpeg.exec(args)
 
       const data = await this.ffmpeg.readFile(outputName)
-      frames.push(new Blob([data], { type: 'image/jpeg' }))
+      frames.push(new Blob([data as BlobPart], { type: 'image/jpeg' }))
       await this.ffmpeg.deleteFile(outputName)
     }
 
@@ -276,7 +296,7 @@ export class FFmpegCore {
 
     // 读取 m3u8 播放列表
     const playlistData = await this.ffmpeg.readFile(playlistName)
-    const playlistBlob = new Blob([playlistData], { type: 'application/vnd.apple.mpegurl' })
+    const playlistBlob = new Blob([playlistData as BlobPart], { type: 'application/vnd.apple.mpegurl' })
     const playlistText = new TextDecoder().decode(playlistData as Uint8Array)
 
     // 解析 m3u8 获取分片文件名
@@ -290,7 +310,7 @@ export class FFmpegCore {
     for (const segName of segmentNames) {
       try {
         const segData = await this.ffmpeg.readFile(segName)
-        segments.push(new Blob([segData], { type: 'video/mp2t' }))
+        segments.push(new Blob([segData as BlobPart], { type: 'video/mp2t' }))
         await this.ffmpeg.deleteFile(segName)
       } catch (e) {
         console.warn(`[FFmpegCore] 无法读取分片 ${segName}:`, e)
@@ -447,6 +467,194 @@ export class FFmpegCore {
    */
   isLoaded(): boolean {
     return this.loaded
+  }
+
+  /**
+   * 导出视频
+   * 将多个片段裁剪并拼接成一个完整的视频
+   */
+  async exportVideo(options: ExportOptions): Promise<Blob> {
+    await this.load()
+    if (!this.ffmpeg) throw new Error('FFmpeg 未加载')
+
+    const { clips, outputFormat, width, height, videoBitrate, audioBitrate, frameRate } = options
+    
+    if (clips.length === 0) {
+      throw new Error('没有可导出的片段')
+    }
+
+    console.log(`[FFmpegCore] 开始导出视频: ${clips.length} 个片段`)
+
+    // 按开始时间排序
+    const sortedClips = [...clips].sort((a, b) => a.startTime - b.startTime)
+
+    // 准备输入文件和裁剪参数
+    const trimmedFiles: string[] = []
+
+    for (let i = 0; i < sortedClips.length; i++) {
+      const clip = sortedClips[i]
+      const inputName = `input_${i}${this.getExtension(clip.file.name)}`
+      const trimmedName = `trimmed_${i}.mp4`
+
+      // 写入输入文件
+      await this.ffmpeg.writeFile(inputName, await fetchFile(clip.file))
+
+      // 裁剪片段
+      const clipDuration = clip.outPoint - clip.inPoint
+      const trimArgs: string[] = [
+        '-ss', clip.inPoint.toString(),
+        '-i', inputName,
+        '-t', clipDuration.toString(),
+        '-c', 'copy',
+        '-y', trimmedName
+      ]
+
+      console.log(`[FFmpegCore] 裁剪片段 ${i + 1}/${sortedClips.length}: ${clip.inPoint}s - ${clip.outPoint}s`)
+      await this.ffmpeg.exec(trimArgs)
+
+      trimmedFiles.push(trimmedName)
+
+      // 删除输入文件
+      await this.ffmpeg.deleteFile(inputName)
+    }
+
+    let finalOutputName: string
+    
+    if (trimmedFiles.length === 1) {
+      // 只有一个片段，直接作为输出
+      finalOutputName = trimmedFiles[0]
+    } else {
+      // 多个片段，需要拼接
+      finalOutputName = await this.concatVideosInternal(trimmedFiles)
+      
+      // 删除临时裁剪文件
+      for (const file of trimmedFiles) {
+        try {
+          await this.ffmpeg.deleteFile(file)
+        } catch (e) {
+          // 忽略删除错误
+        }
+      }
+    }
+
+    // 如果需要重新编码（调整分辨率、码率等）
+    const needReencode = width || height || videoBitrate || audioBitrate || frameRate
+    let outputName = `output.${outputFormat}`
+
+    if (needReencode) {
+      const reencodeArgs: string[] = ['-i', finalOutputName]
+
+      // 构建视频滤镜
+      const vf: string[] = []
+      if (width && height) {
+        vf.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`)
+      }
+      if (vf.length > 0) {
+        reencodeArgs.push('-vf', vf.join(','))
+      }
+
+      if (videoBitrate) {
+        reencodeArgs.push('-b:v', videoBitrate)
+      }
+      if (audioBitrate) {
+        reencodeArgs.push('-b:a', audioBitrate)
+      }
+      if (frameRate) {
+        reencodeArgs.push('-r', frameRate.toString())
+      }
+
+      reencodeArgs.push('-y', outputName)
+
+      console.log('[FFmpegCore] 重新编码视频...')
+      await this.ffmpeg.exec(reencodeArgs)
+
+      // 删除拼接后的临时文件
+      if (finalOutputName !== outputName) {
+        try {
+          await this.ffmpeg.deleteFile(finalOutputName)
+        } catch (e) {
+          // 忽略
+        }
+      }
+    } else {
+      // 不需要重新编码，直接重命名
+      if (finalOutputName !== outputName) {
+        const data = await this.ffmpeg.readFile(finalOutputName)
+        await this.ffmpeg.writeFile(outputName, data)
+        await this.ffmpeg.deleteFile(finalOutputName)
+      } else {
+        outputName = finalOutputName
+      }
+    }
+
+    // 读取最终输出
+    const outputData = await this.ffmpeg.readFile(outputName)
+    
+    // 清理输出文件
+    await this.ffmpeg.deleteFile(outputName)
+
+    console.log('[FFmpegCore] 视频导出完成')
+
+    return new Blob([outputData as BlobPart], { type: this.getMimeType(outputFormat) })
+  }
+
+  /**
+   * 内部方法：拼接多个视频片段
+   */
+  private async concatVideosInternal(inputFiles: string[]): Promise<string> {
+    if (!this.ffmpeg) throw new Error('FFmpeg 未加载')
+
+    // 创建 concat 列表文件
+    const listContent = inputFiles.map(f => `file '${f}'`).join('\n')
+    await this.ffmpeg.writeFile('concat_list.txt', listContent)
+
+    const outputName = 'concat_output.mp4'
+    const args = [
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', 'concat_list.txt',
+      '-c', 'copy',
+      '-y', outputName
+    ]
+
+    console.log('[FFmpegCore] 拼接视频片段...')
+    await this.ffmpeg.exec(args)
+
+    // 删除列表文件
+    await this.ffmpeg.deleteFile('concat_list.txt')
+
+    return outputName
+  }
+
+  /**
+   * 导出单个视频片段
+   */
+  async exportSingleClip(
+    file: File,
+    inPoint: number,
+    outPoint: number,
+    options?: {
+      outputFormat?: 'mp4' | 'webm'
+      width?: number
+      height?: number
+      videoBitrate?: string
+      audioBitrate?: string
+    }
+  ): Promise<Blob> {
+    return this.exportVideo({
+      clips: [{
+        file,
+        startTime: 0,
+        duration: outPoint - inPoint,
+        inPoint,
+        outPoint
+      }],
+      outputFormat: options?.outputFormat ?? 'mp4',
+      width: options?.width,
+      height: options?.height,
+      videoBitrate: options?.videoBitrate,
+      audioBitrate: options?.audioBitrate
+    })
   }
 
   /**

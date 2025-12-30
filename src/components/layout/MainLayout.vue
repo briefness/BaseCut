@@ -1,11 +1,20 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import MaterialUpload from '../upload/MaterialUpload.vue'
 import Player from '../player/Player.vue'
 import Timeline from '../timeline/Timeline.vue'
 import PropertyPanel from '../property/PropertyPanel.vue'
+import ExportDialog from '../export/ExportDialog.vue'
 import { useProjectStore } from '@/stores/project'
 
 const projectStore = useProjectStore()
+
+// 导出对话框状态
+const showExportDialog = ref(false)
+
+function openExportDialog() {
+  showExportDialog.value = true
+}
 </script>
 
 <template>
@@ -32,7 +41,7 @@ const projectStore = useProjectStore()
         <button class="btn btn-ghost" @click="projectStore.save">
           <span>💾</span> 保存
         </button>
-        <button class="btn btn-primary">
+        <button class="btn btn-primary" @click="openExportDialog">
           <span>📤</span> 导出
         </button>
       </div>
@@ -63,6 +72,9 @@ const projectStore = useProjectStore()
         <PropertyPanel />
       </aside>
     </div>
+    
+    <!-- 导出对话框 -->
+    <ExportDialog v-model:visible="showExportDialog" />
   </div>
 </template>
 
