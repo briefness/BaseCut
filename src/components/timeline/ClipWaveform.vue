@@ -119,7 +119,7 @@ function updateDisplayWaveform() {
   drawWaveform()
 }
 
-// 绘制波形到 Canvas
+// 绘制波形到 Canvas（竖条形 + 间隙样式）
 function drawWaveform() {
   const canvas = canvasRef.value
   if (!canvas) return
@@ -140,19 +140,41 @@ function drawWaveform() {
   
   if (peaks.length === 0) return
   
-  // 绘制波形
-  const barWidth = Math.max(1, width / peaks.length)
-  const centerY = height / 2
+  // 竖条形配置
+  const barWidth = 2         // 条形宽度
+  const barGap = 1           // 条形间隙
+  const minBarHeight = 2     // 最小高度
+  const maxBarHeight = height * 0.85  // 最大高度（85%轨道高度）
+  const paddingBottom = 2    // 底部留白
   
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.7)'
+  // 计算需要绘制的条形数量
+  const barSpacing = barWidth + barGap
+  const numBars = Math.floor(width / barSpacing)
   
-  for (let i = 0; i < peaks.length; i++) {
-    const peak = peaks[i]
-    const barHeight = Math.max(2, peak * height * 0.9) // 最小高度 2px
-    const x = i * barWidth
-    const y = centerY - barHeight / 2
+  // 设置颜色（使用当前主题色）
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.65)'
+  
+  for (let i = 0; i < numBars; i++) {
+    // 获取这个区间的峰值（取最大值）
+    const startIdx = Math.floor(i * peaks.length / numBars)
+    const endIdx = Math.min(Math.floor((i + 1) * peaks.length / numBars), peaks.length)
     
-    ctx.fillRect(x, y, Math.max(1, barWidth - 0.5), barHeight)
+    let maxPeak = 0
+    for (let j = startIdx; j < endIdx; j++) {
+      maxPeak = Math.max(maxPeak, peaks[j])
+    }
+    
+    // 计算条形高度
+    const barHeight = Math.max(minBarHeight, maxPeak * maxBarHeight)
+    
+    // 从底部向上绘制
+    const x = i * barSpacing
+    const y = height - paddingBottom - barHeight
+    
+    // 绘制圆角条形
+    ctx.beginPath()
+    ctx.roundRect(x, y, barWidth, barHeight, 1)
+    ctx.fill()
   }
 }
 
