@@ -117,16 +117,71 @@ export const useTimelineStore = defineStore('timeline', () => {
   // ==================== 片段操作 ====================
 
   /**
-   * 添加片段
+   * 检查两个片段是否重叠
+   */
+  function isOverlapping(clip1Start: number, clip1End: number, clip2Start: number, clip2End: number): boolean {
+    return clip1Start < clip2End && clip1End > clip2Start
+  }
+
+  /**
+   * 在轨道中找到不会重叠的位置
+   * @param track 目标轨道
+   * @param desiredStart 期望的起始时间
+   * @param duration 片段时长
+   * @param excludeClipId 排除的片段 ID（用于移动时排除自身）
+   * @returns 调整后的起始时间
+   */
+  function findNonOverlappingPosition(
+    track: Track,
+    desiredStart: number,
+    duration: number,
+    excludeClipId?: string
+  ): number {
+    // 获取轨道上的其他片段（排除自身）
+    const otherClips = track.clips
+      .filter(c => c.id !== excludeClipId)
+      .sort((a, b) => a.startTime - b.startTime)
+    
+    if (otherClips.length === 0) {
+      return Math.max(0, desiredStart)
+    }
+    
+    let startTime = Math.max(0, desiredStart)
+    const endTime = startTime + duration
+    
+    // 寻找一个不重叠的位置
+    for (const clip of otherClips) {
+      const clipEnd = clip.startTime + clip.duration
+      
+      // 如果当前位置与此片段重叠
+      if (isOverlapping(startTime, endTime, clip.startTime, clipEnd)) {
+        // 将起始时间移动到此片段的结束位置
+        startTime = clipEnd
+      }
+    }
+    
+    return startTime
+  }
+
+  /**
+   * 添加片段（自动防重叠）
    */
   function addClip(trackId: string, clip: Omit<Clip, 'id' | 'trackId'>): Clip {
     const track = tracks.value.find(t => t.id === trackId)
     if (!track) throw new Error('轨道不存在')
 
+    // 计算不重叠的起始位置
+    const adjustedStartTime = findNonOverlappingPosition(
+      track,
+      clip.startTime,
+      clip.duration
+    )
+
     const newClip: Clip = {
       ...clip,
       id: crypto.randomUUID(),
-      trackId
+      trackId,
+      startTime: adjustedStartTime
     }
 
     track.clips.push(newClip)
@@ -169,16 +224,30 @@ export const useTimelineStore = defineStore('timeline', () => {
   }
 
   /**
-   * 移动片段到新时间位置
+   * 移动片段到新时间位置（自动防重叠）
    */
   function moveClip(clipId: string, newStartTime: number): void {
-    updateClip(clipId, { startTime: Math.max(0, newStartTime) })
+    // 找到片段所在的轨道
+    for (const track of tracks.value) {
+      const clip = track.clips.find(c => c.id === clipId)
+      if (clip) {
+        // 计算不重叠的位置
+        const adjustedStartTime = findNonOverlappingPosition(
+          track,
+          Math.max(0, newStartTime),
+          clip.duration,
+          clipId  // 排除自身
+        )
+        updateClip(clipId, { startTime: adjustedStartTime })
+        return
+      }
+    }
   }
 
   /**
-   * 移动片段到其他轨道
+   * 移动片段到其他轨道（自动防重叠）
    */
-  function moveClipToTrack(clipId: string, targetTrackId: string): void {
+  function moveClipToTrack(clipId: string, targetTrackId: string, newStartTime?: number): void {
     let movedClip: Clip | null = null
     
     // 从原轨道移除
@@ -194,8 +263,18 @@ export const useTimelineStore = defineStore('timeline', () => {
     if (movedClip) {
       const targetTrack = tracks.value.find(t => t.id === targetTrackId)
       if (targetTrack) {
+        // 计算不重叠的位置
+        const desiredStart = newStartTime ?? movedClip.startTime
+        const adjustedStartTime = findNonOverlappingPosition(
+          targetTrack,
+          desiredStart,
+          movedClip.duration
+        )
+        
         movedClip.trackId = targetTrackId
+        movedClip.startTime = adjustedStartTime
         targetTrack.clips.push(movedClip)
+        updateDuration()
       }
     }
   }

@@ -109,9 +109,17 @@ function addSubtitle() {
     textTrack = timelineStore.addTrack('text', '字幕轨道')
   }
   
-  // 在当前时间点添加字幕片段
-  const startTime = timelineStore.currentTime
+  // 计算新字幕的起始时间
+  // 策略：取【当前时间】和【轨道上最后一个字幕结束时间】的较大值
+  const trackClips = textTrack.clips
+  const lastClipEndTime = trackClips.reduce((max: number, clip) => {
+    return Math.max(max, clip.startTime + clip.duration)
+  }, 0)
+  
   const duration = 3 // 默认 3 秒
+  // 如果当前时间在最后一个字幕内部或之前，则在最后一个字幕后添加
+  // 如果当前时间在最后一个字幕之后，则在当前时间添加
+  const startTime = Math.max(timelineStore.currentTime, lastClipEndTime)
   
   const clip = timelineStore.addClip(textTrack.id, {
     startTime,
