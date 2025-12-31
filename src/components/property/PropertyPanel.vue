@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
+import SubtitleEditor from './SubtitleEditor.vue'
 
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
@@ -16,6 +17,16 @@ const selectedMaterial = computed(() => {
   if (!selectedClip.value?.materialId) return null
   return resourceStore.getMaterial(selectedClip.value.materialId)
 })
+
+// 选中片段所属的轨道类型
+const selectedTrackType = computed(() => {
+  if (!selectedClip.value) return null
+  const track = timelineStore.tracks.find(t => t.id === selectedClip.value?.trackId)
+  return track?.type ?? null
+})
+
+// 是否是字幕片段
+const isTextClip = computed(() => selectedTrackType.value === 'text')
 
 // 格式化时长
 function formatDuration(seconds?: number): string {
@@ -31,6 +42,12 @@ function updateClipProperty(key: string, value: number | string) {
   if (!selectedClip.value) return
   timelineStore.updateClip(selectedClip.value.id, { [key]: value })
   projectStore.markDirty()
+}
+
+// 删除片段
+function deleteClip() {
+  if (!selectedClip.value) return
+  timelineStore.removeClip(selectedClip.value.id)
 }
 </script>
 
@@ -118,49 +135,14 @@ function updateClipProperty(key: string, value: number | string) {
           </div>
         </section>
 
-        <!-- 文字属性（如果是文字轨道） -->
-        <section v-if="selectedClip.text !== undefined" class="property-section">
-          <h4>文字</h4>
-          
-          <div class="property-row vertical">
-            <label>内容</label>
-            <textarea 
-              class="input"
-              :value="selectedClip.text"
-              @change="(e) => updateClipProperty('text', (e.target as HTMLTextAreaElement).value)"
-              rows="3"
-            ></textarea>
-          </div>
-
-          <div class="property-row">
-            <label>字号</label>
-            <div class="input-group">
-              <input 
-                type="number"
-                class="input small"
-                :value="selectedClip.fontSize ?? 24"
-                min="12"
-                max="200"
-                @change="(e) => updateClipProperty('fontSize', Number((e.target as HTMLInputElement).value))"
-              />
-              <span class="input-suffix">px</span>
-            </div>
-          </div>
-
-          <div class="property-row">
-            <label>颜色</label>
-            <input 
-              type="color"
-              class="color-input"
-              :value="selectedClip.fontColor ?? '#ffffff'"
-              @change="(e) => updateClipProperty('fontColor', (e.target as HTMLInputElement).value)"
-            />
-          </div>
-        </section>
+        <!-- 字幕编辑器（文字轨道片段） -->
+        <SubtitleEditor />
 
         <!-- 操作按钮 -->
         <section class="property-section actions">
+          <!-- 非字幕片段才显示分割按钮 -->
           <button 
+            v-if="!isTextClip"
             class="btn btn-secondary full-width"
             @click="timelineStore.splitClip(selectedClip.id, timelineStore.currentTime)"
           >
@@ -169,9 +151,9 @@ function updateClipProperty(key: string, value: number | string) {
           
           <button 
             class="btn btn-ghost full-width danger"
-            @click="timelineStore.removeClip(selectedClip.id)"
+            @click="deleteClip"
           >
-            🗑️ 删除片段
+            🗑️ 删除{{ isTextClip ? '字幕' : '片段' }}
           </button>
         </section>
       </div>

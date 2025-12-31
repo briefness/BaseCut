@@ -6,6 +6,7 @@ import { useResourceStore } from '@/stores/resource'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 import { HLSPlayer } from '@/engine/HLSPlayer'
 import { frameExtractor } from '@/utils/FrameExtractor'
+import { subtitleRenderer } from '@/utils/SubtitleRenderer'
 
 const timelineStore = useTimelineStore()
 const projectStore = useProjectStore()
@@ -13,6 +14,7 @@ const resourceStore = useResourceStore()
 
 // Canvas 元素和渲染器
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const subtitleCanvasRef = ref<HTMLCanvasElement | null>(null)  // 字幕层 Canvas
 const containerRef = ref<HTMLDivElement | null>(null)
 let renderer: WebGLRenderer | null = null
 let videoElement: HTMLVideoElement | null = null
@@ -20,6 +22,8 @@ let audioElement: HTMLAudioElement | null = null  // 独立的音频元素
 let hlsPlayer: HLSPlayer | null = null
 let animationId: number | null = null
 let currentAudioMaterialId: string | null = null  // 当前加载的音频素材 ID
+let lastVideoClipId: string | null = null  // 上一个渲染的视频片段 ID
+let needsInitialSeek = false  // 是否需要初始 seek
 
 // 显示尺寸（根据容器自适应）
 const displaySize = ref({ width: 640, height: 360 })
@@ -234,64 +238,77 @@ function loadVideoSource(url: string) {
   }
 }
 
-// 渲染循环
+// 渲染循环（高性能优化版）
+// 核心优化：使用局部变量跟踪渲染时间，降低 Pinia 更新频率
+let localRenderTime = 0        // 局部渲染时间（不触发响应式）
+let lastSyncTime = 0           // 上次同步到 Pinia 的时间
+const SYNC_INTERVAL = 50       // 同步间隔（毫秒）- 20fps 足够 UI 更新
+
 function startRenderLoop() {
-  let lastTime = performance.now()
+  let lastFrameTime = performance.now()
+  localRenderTime = timelineStore.currentTime  // 初始化为当前时间
   
   const render = () => {
     const now = performance.now()
-    const deltaTime = (now - lastTime) / 1000 // 转换为秒
-    lastTime = now
+    const deltaTime = (now - lastFrameTime) / 1000
+    lastFrameTime = now
     
     if (timelineStore.isPlaying) {
-      // 优先使用音频或视频的实际播放时间来同步时间线
-      // 这样可以避免时间偏差导致的频繁 seek
+      // 使用媒体元素时间或 deltaTime 更新局部渲染时间
       let syncedFromMedia = false
       
-      // 检查是否有音频在播放
+      // 从音频同步（如果有）
       if (audioElement && !audioElement.paused && currentAudioMaterialId) {
-        const activeClips = timelineStore.getActiveClips(timelineStore.currentTime)
+        const activeClips = timelineStore.getActiveClips(localRenderTime)
         const audioClip = activeClips.find(c => {
           const m = resourceStore.getMaterial(c.materialId ?? '')
           return m?.type === 'audio'
         })
         if (audioClip) {
-          // 从音频播放时间反推时间线时间
-          const timelineTime = audioElement.currentTime - audioClip.inPoint + audioClip.startTime
-          timelineStore.seek(timelineTime)
+          localRenderTime = audioElement.currentTime - audioClip.inPoint + audioClip.startTime
           syncedFromMedia = true
         }
       }
       
-      // 检查是否有视频在播放
+      // 从视频同步（如果有）
       if (!syncedFromMedia && videoElement && !videoElement.paused) {
-        const activeClips = timelineStore.getActiveClips(timelineStore.currentTime)
+        const activeClips = timelineStore.getActiveClips(localRenderTime)
         const videoClip = activeClips.find(c => {
           const m = resourceStore.getMaterial(c.materialId ?? '')
           return m?.type === 'video'
         })
         if (videoClip) {
-          // 从视频播放时间反推时间线时间
-          const timelineTime = videoElement.currentTime - videoClip.inPoint + videoClip.startTime
-          timelineStore.seek(timelineTime)
+          localRenderTime = videoElement.currentTime - videoClip.inPoint + videoClip.startTime
           syncedFromMedia = true
         }
       }
       
-      // 如果没有媒体在播放，使用精确的时间递增
+      // 没有媒体时使用 deltaTime
       if (!syncedFromMedia) {
-        timelineStore.seek(timelineStore.currentTime + deltaTime)
+        localRenderTime += deltaTime
       }
       
-      // 到达末尾时停止
-      if (timelineStore.currentTime >= timelineStore.duration) {
+      // 边界检查
+      if (localRenderTime >= timelineStore.duration) {
         timelineStore.pause()
+        localRenderTime = 0
         timelineStore.seek(0)
       }
+      
+      // 低频同步到 Pinia（每 SYNC_INTERVAL 毫秒）
+      if (now - lastSyncTime > SYNC_INTERVAL) {
+        timelineStore.seek(localRenderTime)
+        lastSyncTime = now
+      }
+    } else {
+      // 非播放状态时，同步 Pinia 时间到局部变量
+      localRenderTime = timelineStore.isSeeking 
+        ? timelineStore.seekingTime 
+        : timelineStore.currentTime
     }
     
-    // 渲染当前帧
-    renderCurrentFrame()
+    // 使用局部时间渲染当前帧
+    renderCurrentFrame(localRenderTime)
     
     animationId = requestAnimationFrame(render)
   }
@@ -338,18 +355,13 @@ function renderThumbnailFrame(frameUrl: string, cacheKey: string) {
 }
 
 // 渲染当前帧
-function renderCurrentFrame() {
+function renderCurrentFrame(renderTime: number) {
   if (!renderer || !videoElement) return
   
   // 同步音量
   videoElement.volume = timelineStore.volume
   
-  // 获取渲染时间点（拖拽时使用预览时间）
-  const renderTime = timelineStore.isSeeking 
-    ? timelineStore.seekingTime 
-    : timelineStore.currentTime
-  
-  // 获取当前时间点的所有活跃片段
+  // 获取当前时间点的所有活跃片段（使用传入的渲染时间）
   const activeClips = timelineStore.getActiveClips(renderTime)
   
   // 找到视频片段
@@ -408,11 +420,22 @@ function renderCurrentFrame() {
       const currentSrc = hlsPlayer?.getCurrentSource() ?? videoElement.src
       if (currentSrc !== videoUrl && videoUrl) {
         loadVideoSource(videoUrl)
+        needsInitialSeek = true  // 加载新源时需要 seek
       }
       
-      if (!isHLSSource.value) {
-        if (Math.abs(videoElement.currentTime - clipTime) > 0.1) {
+      // 只在以下情况 seek，而不是每帧都 seek
+      // 1. 切换到不同的视频片段
+      // 2. 加载新视频源后的初始 seek
+      // 3. 播放状态刚开始时的同步
+      const isNewClip = videoClip.id !== lastVideoClipId
+      const isJustStartedPlaying = timelineStore.isPlaying && videoElement.paused
+      
+      if (!isHLSSource.value && (isNewClip || needsInitialSeek || isJustStartedPlaying)) {
+        // 只有在这些情况下才 seek
+        if (videoElement.readyState >= 1) {
           videoElement.currentTime = clipTime
+          lastVideoClipId = videoClip.id
+          needsInitialSeek = false
         }
       }
       
@@ -451,6 +474,10 @@ function renderCurrentFrame() {
   } else {
     renderer.clear()
   }
+  
+  // 渲染字幕（叠加在视频/图片之上）
+  const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+  renderSubtitles(subtitleTime)
   
   // 处理独立音频轨道
   if (audioClip && audioClip.materialId && audioElement) {
@@ -494,6 +521,62 @@ function renderCurrentFrame() {
 
 // 图片缓存
 const imageCache = new Map<string, HTMLImageElement>()
+
+// 渲染字幕（使用独立的 2D Canvas 层）
+function renderSubtitles(currentTime: number) {
+  if (!subtitleCanvasRef.value) return
+  
+  const ctx = subtitleCanvasRef.value.getContext('2d')
+  if (!ctx) return
+  
+  // 清除字幕层
+  ctx.clearRect(0, 0, displaySize.value.width, displaySize.value.height)
+  
+  // 获取文字轨道片段
+  const textClips = timelineStore.getActiveClips(currentTime).filter(clip => {
+    const track = timelineStore.tracks.find(t => t.id === clip.trackId)
+    return track?.type === 'text'
+  })
+  
+  // 渲染每个字幕
+  for (const clip of textClips) {
+    if (clip.subtitle) {
+      subtitleRenderer.render(clip.subtitle, {
+        ctx,
+        canvasWidth: displaySize.value.width,
+        canvasHeight: displaySize.value.height,
+        currentTime,
+        clipStartTime: clip.startTime,
+        clipDuration: clip.duration
+      })
+    } else if (clip.text) {
+      // 兼容旧格式
+      subtitleRenderer.render({
+        text: clip.text,
+        style: {
+          fontFamily: 'Microsoft YaHei, sans-serif',
+          fontSize: clip.fontSize ?? 48,
+          fontWeight: 'normal',
+          fontStyle: 'normal',
+          color: clip.fontColor ?? '#ffffff',
+          strokeEnabled: true,
+          strokeColor: '#000000',
+          strokeWidth: 2,
+          textAlign: 'center',
+          lineHeight: 1.4
+        },
+        position: { x: 50, y: 85 }
+      }, {
+        ctx,
+        canvasWidth: displaySize.value.width,
+        canvasHeight: displaySize.value.height,
+        currentTime,
+        clipStartTime: clip.startTime,
+        clipDuration: clip.duration
+      })
+    }
+  }
+}
 
 // 监听项目分辨率变化
 watch(
@@ -546,6 +629,14 @@ function formatTime(seconds: number): string {
         :width="displaySize.width"
         :height="displaySize.height"
         class="video-canvas"
+      />
+      
+      <!-- 字幕层 Canvas -->
+      <canvas 
+        ref="subtitleCanvasRef" 
+        :width="displaySize.width"
+        :height="displaySize.height"
+        class="subtitle-canvas"
       />
       
       <!-- 空状态 -->
@@ -688,6 +779,16 @@ function formatTime(seconds: number): string {
   /* 确保使用 HTML 属性设置的尺寸，不被 CSS 拉伸 */
   max-width: 100%;
   max-height: 100%;
+}
+
+/* 字幕层 Canvas */
+.subtitle-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;  /* 允许点击穿透 */
 }
 
 /* 进度条 */

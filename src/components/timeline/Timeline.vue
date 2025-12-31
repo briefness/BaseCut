@@ -5,6 +5,7 @@ import { useResourceStore } from '@/stores/resource'
 import ClipThumbnails from './ClipThumbnails.vue'
 import ClipWaveform from './ClipWaveform.vue'
 import type { Track, Clip } from '@/types'
+import { DEFAULT_SUBTITLE_STYLE, DEFAULT_SUBTITLE_POSITION } from '@/types'
 
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
@@ -12,6 +13,7 @@ const resourceStore = useResourceStore()
 // 时间线容器引用
 const timelineRef = ref<HTMLDivElement | null>(null)
 const rulerRef = ref<HTMLDivElement | null>(null)
+const rulerScrollOffset = ref(0)  // 时间尺滚动偏移量
 
 // 每秒像素数（根据缩放和容器宽度计算）
 const pixelsPerSecond = computed(() => 50 * timelineStore.zoom)
@@ -90,6 +92,7 @@ function getTrackColor(type: string): string {
 
 // 获取片段显示名称
 function getClipName(clip: Clip): string {
+  if (clip.subtitle?.text) return clip.subtitle.text.substring(0, 20)
   if (clip.text) return clip.text.substring(0, 20)
   if (clip.materialId) {
     const material = resourceStore.getMaterial(clip.materialId)
@@ -98,11 +101,40 @@ function getClipName(clip: Clip): string {
   return '片段'
 }
 
+// 快速添加字幕
+function addSubtitle() {
+  // 找到或创建文字轨道
+  let textTrack = timelineStore.tracks.find(t => t.type === 'text')
+  if (!textTrack) {
+    textTrack = timelineStore.addTrack('text', '字幕轨道')
+  }
+  
+  // 在当前时间点添加字幕片段
+  const startTime = timelineStore.currentTime
+  const duration = 3 // 默认 3 秒
+  
+  const clip = timelineStore.addClip(textTrack.id, {
+    startTime,
+    duration,
+    inPoint: 0,
+    outPoint: duration,
+    effects: [],
+    subtitle: {
+      text: '输入字幕文本',
+      style: { ...DEFAULT_SUBTITLE_STYLE },
+      position: { ...DEFAULT_SUBTITLE_POSITION }
+    }
+  })
+  
+  // 选中新添加的字幕
+  timelineStore.selectClip(clip.id)
+}
+
 // 点击时间标尺定位
 function handleRulerClick(e: MouseEvent) {
   if (!rulerRef.value) return
   const rect = rulerRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left + rulerRef.value.scrollLeft
+  const x = e.clientX - rect.left + rulerScrollOffset.value  // 使用同步的偏移量
   const time = x / pixelsPerSecond.value
   timelineStore.seek(Math.max(0, time))
 }
@@ -379,9 +411,8 @@ function handleZoom(delta: number) {
 // 同步滚动
 function syncScroll(e: Event) {
   const target = e.target as HTMLElement
-  if (rulerRef.value && target !== rulerRef.value) {
-    rulerRef.value.scrollLeft = target.scrollLeft
-  }
+  // 同步时间尺滚动偏移（使用 transform）
+  rulerScrollOffset.value = target.scrollLeft
   if (timelineRef.value && target !== timelineRef.value) {
     timelineRef.value.scrollLeft = target.scrollLeft
   }
@@ -412,6 +443,9 @@ onUnmounted(() => {
           <button class="btn btn-ghost" @click="addTrack('text')">
             + 文字轨道
           </button>
+          <button class="btn btn-primary" @click="addSubtitle">
+            📝 添加字幕
+          </button>
         </div>
       </div>
       
@@ -431,7 +465,7 @@ onUnmounted(() => {
       ref="rulerRef"
       @click="handleRulerClick"
     >
-      <div class="ruler-content" :style="{ width: `${timelineWidth}px` }">
+      <div class="ruler-content" :style="{ width: `${timelineWidth}px`, transform: `translateX(-${rulerScrollOffset}px)` }">
         <div 
           v-for="marker in timeMarkers"
           :key="marker.time"
@@ -648,8 +682,7 @@ onUnmounted(() => {
   height: 28px;
   background: var(--bg-tertiary);
   border-bottom: 1px solid var(--border-secondary);
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;  /* 禁用独立滚动，与轨道区域同步 */
   flex-shrink: 0;
   cursor: pointer;
   margin-left: 120px; /* 与轨道头部对齐 */

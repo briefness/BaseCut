@@ -72,6 +72,103 @@ export interface Track {
   locked: boolean
 }
 
+// ==================== 字幕类型 ====================
+
+// 字幕样式
+export interface SubtitleStyle {
+  // 基础样式
+  fontFamily: string           // 字体
+  fontSize: number             // 字号 (px)
+  fontWeight: 'normal' | 'bold'
+  fontStyle: 'normal' | 'italic'
+  color: string                // 文字颜色
+  
+  // 描边
+  strokeEnabled?: boolean
+  strokeColor?: string
+  strokeWidth?: number
+  
+  // 阴影
+  shadowEnabled?: boolean
+  shadowColor?: string
+  shadowOffsetX?: number
+  shadowOffsetY?: number
+  shadowBlur?: number
+  
+  // 背景
+  backgroundEnabled?: boolean
+  backgroundColor?: string
+  backgroundPadding?: number
+  backgroundRadius?: number
+  
+  // 对齐
+  textAlign: 'left' | 'center' | 'right'
+  lineHeight: number           // 行高倍数，如 1.5
+}
+
+// 字幕位置
+export interface SubtitlePosition {
+  x: number    // 相对画布宽度的百分比 (0-100)
+  y: number    // 相对画布高度的百分比 (0-100)
+}
+
+// 字幕动画类型
+export type SubtitleAnimationType = 
+  | 'none' 
+  | 'fadeIn' 
+  | 'fadeOut' 
+  | 'typewriter' 
+  | 'bounce' 
+  | 'slideUp' 
+  | 'slideDown'
+  | 'scale'
+
+// 字幕动画
+export interface SubtitleAnimation {
+  type: SubtitleAnimationType
+  duration: number  // 动画时长 (秒)
+}
+
+// 完整字幕配置
+export interface Subtitle {
+  text: string
+  style: SubtitleStyle
+  position: SubtitlePosition
+  enterAnimation?: SubtitleAnimation
+  exitAnimation?: SubtitleAnimation
+}
+
+// 默认字幕样式
+export const DEFAULT_SUBTITLE_STYLE: SubtitleStyle = {
+  fontFamily: 'Microsoft YaHei, PingFang SC, sans-serif',
+  fontSize: 48,
+  fontWeight: 'normal',
+  fontStyle: 'normal',
+  color: '#ffffff',
+  strokeEnabled: true,
+  strokeColor: '#000000',
+  strokeWidth: 2,
+  shadowEnabled: false,
+  shadowColor: '#000000',
+  shadowOffsetX: 2,
+  shadowOffsetY: 2,
+  shadowBlur: 4,
+  backgroundEnabled: false,
+  backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  backgroundPadding: 8,
+  backgroundRadius: 4,
+  textAlign: 'center',
+  lineHeight: 1.4
+}
+
+// 默认字幕位置（底部居中）
+export const DEFAULT_SUBTITLE_POSITION: SubtitlePosition = {
+  x: 50,
+  y: 85
+}
+
+// ==================== 片段类型 ====================
+
 export interface Clip {
   id: string
   trackId: string
@@ -81,9 +178,15 @@ export interface Clip {
   inPoint: number      // 素材入点（秒）
   outPoint: number     // 素材出点（秒）
   effects: Effect[]
-  // 文字轨道专用
+  
+  // 字幕（文字轨道专用）
+  subtitle?: Subtitle
+  
+  // @deprecated 使用 subtitle.text
   text?: string
+  // @deprecated 使用 subtitle.style.fontSize
   fontSize?: number
+  // @deprecated 使用 subtitle.style.color
   fontColor?: string
 }
 
