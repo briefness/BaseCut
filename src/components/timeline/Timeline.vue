@@ -138,20 +138,22 @@ function addSubtitle() {
   timelineStore.selectClip(clip.id)
 }
 
-// 点击时间标尺定位
+// 点击时间标尺定位（立即跳转 + 显示帧）
 function handleRulerClick(e: MouseEvent) {
   if (!rulerRef.value) return
   const rect = rulerRef.value.getBoundingClientRect()
-  const x = e.clientX - rect.left + rulerScrollOffset.value  // 使用同步的偏移量
-  const time = x / pixelsPerSecond.value
-  timelineStore.seek(Math.max(0, time))
+  // rulerScrollOffset 已经通过 transform 处理了偏移，所以不需要再加
+  const x = e.clientX - rect.left + rulerScrollOffset.value
+  const time = Math.max(0, x / pixelsPerSecond.value)
+  console.log('[Timeline] Ruler click:', { x, time, rulerScrollOffset: rulerScrollOffset.value })
+  timelineStore.seek(time)
 }
 
-// 播放头拖拽
+// 播放头拖拽（实时预览 + 实时跳转）
 function startPlayheadDrag(e: MouseEvent) {
   e.preventDefault()
   isDraggingPlayhead.value = true
-  timelineStore.startSeeking()  // 通知开始拖拽预览
+  timelineStore.startSeeking()
   document.addEventListener('mousemove', handlePlayheadDrag)
   document.addEventListener('mouseup', stopPlayheadDrag)
 }
@@ -160,14 +162,15 @@ function handlePlayheadDrag(e: MouseEvent) {
   if (!isDraggingPlayhead.value || !timelineRef.value) return
   const rect = timelineRef.value.getBoundingClientRect()
   const x = e.clientX - rect.left + timelineRef.value.scrollLeft
-  const time = x / pixelsPerSecond.value
-  // 使用预览时间更新，不触发实际 seek
-  timelineStore.updateSeekingTime(Math.max(0, Math.min(time, timelineStore.duration)))
+  const time = Math.max(0, Math.min(x / pixelsPerSecond.value, timelineStore.duration))
+  // 实时预览 + 实时跳转
+  timelineStore.updateSeekingTime(time)
+  timelineStore.seek(time)
 }
 
 function stopPlayheadDrag() {
   isDraggingPlayhead.value = false
-  timelineStore.stopSeeking()  // 结束拖拽，执行实际 seek
+  timelineStore.stopSeeking()
   document.removeEventListener('mousemove', handlePlayheadDrag)
   document.removeEventListener('mouseup', stopPlayheadDrag)
 }

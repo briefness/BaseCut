@@ -54,7 +54,7 @@ function onProgressClick(e: MouseEvent) {
   timelineStore.seek(Math.max(0, Math.min(newTime, timelineStore.duration)))
 }
 
-// 进度条拖动
+// 进度条拖动（使用预览机制与时间轴播放头保持一致）
 function onProgressMouseDown(e: MouseEvent) {
   if (!progressBarRef.value) return
   
@@ -62,17 +62,24 @@ function onProgressMouseDown(e: MouseEvent) {
   const wasPlaying = timelineStore.isPlaying
   if (wasPlaying) timelineStore.pause()
   
+  // 开始拖拽预览
+  timelineStore.startSeeking()
+  
   const onMouseMove = (moveEvent: MouseEvent) => {
     if (!progressBarRef.value) return
     
     const rect = progressBarRef.value.getBoundingClientRect()
     const percent = Math.max(0, Math.min(1, (moveEvent.clientX - rect.left) / rect.width))
     const newTime = percent * timelineStore.duration
+    // 实时预览 + 实时跳转
+    timelineStore.updateSeekingTime(newTime)
     timelineStore.seek(newTime)
   }
   
   const onMouseUp = () => {
     isDraggingProgress.value = false
+    // 结束拖拽，执行实际 seek
+    timelineStore.stopSeeking()
     if (wasPlaying) timelineStore.play()
     
     document.removeEventListener('mousemove', onMouseMove)
@@ -301,10 +308,9 @@ function startRenderLoop() {
         lastSyncTime = now
       }
     } else {
-      // 非播放状态时，同步 Pinia 时间到局部变量
-      localRenderTime = timelineStore.isSeeking 
-        ? timelineStore.seekingTime 
-        : timelineStore.currentTime
+      // 非播放状态时，始终使用 currentTime（seek 会更新它）
+      // isSeeking 时使用 seekingTime 以获得更快的响应
+      localRenderTime = timelineStore.currentTime
     }
     
     // 使用局部时间渲染当前帧
@@ -427,10 +433,13 @@ function renderCurrentFrame(renderTime: number) {
       // 1. 切换到不同的视频片段
       // 2. 加载新视频源后的初始 seek
       // 3. 播放状态刚开始时的同步
+      // 4. 暂停状态下用户跳转到新位置（时间差超过阈值）
       const isNewClip = videoClip.id !== lastVideoClipId
       const isJustStartedPlaying = timelineStore.isPlaying && videoElement.paused
+      const isPausedAndNeedsSeek = !timelineStore.isPlaying && 
+        Math.abs(videoElement.currentTime - clipTime) > 0.05
       
-      if (!isHLSSource.value && (isNewClip || needsInitialSeek || isJustStartedPlaying)) {
+      if (!isHLSSource.value && (isNewClip || needsInitialSeek || isJustStartedPlaying || isPausedAndNeedsSeek)) {
         // 只有在这些情况下才 seek
         if (videoElement.readyState >= 1) {
           videoElement.currentTime = clipTime
