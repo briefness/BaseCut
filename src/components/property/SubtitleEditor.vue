@@ -72,16 +72,24 @@ const positionPresets = [
   { name: '底部', x: 50, y: 85 }
 ]
 
-// 动画选项
-const animationOptions = [
+// 入场动画选项（只包含有效的入场动画）
+const enterAnimationOptions = [
   { value: 'none', label: '无' },
   { value: 'fadeIn', label: '淡入' },
-  { value: 'fadeOut', label: '淡出' },
   { value: 'typewriter', label: '打字机' },
-  { value: 'slideUp', label: '上滑' },
-  { value: 'slideDown', label: '下滑' },
-  { value: 'scale', label: '缩放' },
-  { value: 'bounce', label: '弹跳' }
+  { value: 'slideUp', label: '上滑入' },
+  { value: 'slideDown', label: '下滑入' },
+  { value: 'scale', label: '缩放入' },
+  { value: 'bounce', label: '弹跳入' }
+]
+
+// 出场动画选项（只包含有效的出场动画）
+const exitAnimationOptions = [
+  { value: 'none', label: '无' },
+  { value: 'fadeOut', label: '淡出' },
+  { value: 'slideUp', label: '上滑出' },
+  { value: 'slideDown', label: '下滑出' },
+  { value: 'scale', label: '缩放出' }
 ]
 
 // 字体选项
@@ -254,31 +262,55 @@ const fontOptions = [
     
     <!-- 动画 -->
     <div class="form-section">
-      <h4>动画</h4>
+      <h4>动画效果</h4>
       
-      <div class="form-row">
+      <div class="animation-grid">
         <div class="form-group">
-          <label>入场</label>
+          <label>入场动画</label>
           <select 
             :value="subtitle?.enterAnimation?.type ?? 'none'"
             @change="updateEnterAnimation({ type: ($event.target as HTMLSelectElement).value as any })"
           >
-            <option v-for="opt in animationOptions" :key="opt.value" :value="opt.value">
+            <option v-for="opt in enterAnimationOptions" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </option>
           </select>
         </div>
         
+        <div class="form-group" v-if="subtitle?.enterAnimation?.type && subtitle?.enterAnimation?.type !== 'none'">
+          <label>入场时长(s)</label>
+          <input 
+            type="number" 
+            :value="subtitle?.enterAnimation?.duration ?? 0.5"
+            @input="updateEnterAnimation({ duration: Number(($event.target as HTMLInputElement).value) })"
+            min="0.1" 
+            max="3"
+            step="0.1"
+          />
+        </div>
+        
         <div class="form-group">
-          <label>出场</label>
+          <label>出场动画</label>
           <select 
             :value="subtitle?.exitAnimation?.type ?? 'none'"
             @change="updateExitAnimation({ type: ($event.target as HTMLSelectElement).value as any })"
           >
-            <option v-for="opt in animationOptions" :key="opt.value" :value="opt.value">
+            <option v-for="opt in exitAnimationOptions" :key="opt.value" :value="opt.value">
               {{ opt.label }}
             </option>
           </select>
+        </div>
+        
+        <div class="form-group" v-if="subtitle?.exitAnimation?.type && subtitle?.exitAnimation?.type !== 'none'">
+          <label>出场时长(s)</label>
+          <input 
+            type="number" 
+            :value="subtitle?.exitAnimation?.duration ?? 0.5"
+            @input="updateExitAnimation({ duration: Number(($event.target as HTMLInputElement).value) })"
+            min="0.1" 
+            max="3"
+            step="0.1"
+          />
         </div>
       </div>
     </div>
@@ -286,31 +318,40 @@ const fontOptions = [
 </template>
 
 <style scoped>
+/* ==================== 容器 ==================== */
 .subtitle-editor {
-  padding: 16px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .section-title {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   margin: 0;
   color: var(--text-primary);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
+/* ==================== 表单分组 ==================== */
 .form-section {
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 .form-section h4 {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 600;
   margin: 0;
   color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .section-header {
@@ -319,6 +360,7 @@ const fontOptions = [
   align-items: center;
 }
 
+/* ==================== 表单项 ==================== */
 .form-group {
   display: flex;
   flex-direction: column;
@@ -326,77 +368,145 @@ const fontOptions = [
 }
 
 .form-group label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-muted);
+  font-weight: 500;
 }
 
 .form-row {
-  display: flex;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+  gap: 10px;
 }
 
-.form-row .form-group {
-  flex: 1;
-}
-
+/* ==================== 文本域 ==================== */
 textarea {
   width: 100%;
-  padding: 8px;
+  padding: 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
   color: var(--text-primary);
   font-size: 13px;
   resize: vertical;
+  min-height: 60px;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
+textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+}
+
+/* ==================== 输入框 & 选择器 ==================== */
 input[type="number"],
 input[type="text"],
 select {
   width: 100%;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 12px;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
+input[type="number"]:focus,
+input[type="text"]:focus,
+select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.15);
+}
+
+/* ==================== 颜色选择器 ==================== */
 input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
-  height: 32px;
-  padding: 2px;
+  height: 36px;
+  padding: 3px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
   cursor: pointer;
+  transition: border-color 0.2s;
 }
 
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 4px;
+}
+
+input[type="color"]:hover {
+  border-color: var(--primary);
+}
+
+/* ==================== 自定义 Toggle Switch ==================== */
 input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 36px;
+  height: 20px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  position: relative;
   cursor: pointer;
+  transition: all 0.2s;
 }
 
+input[type="checkbox"]::before {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background: var(--text-muted);
+  transition: all 0.2s;
+}
+
+input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+input[type="checkbox"]:checked::before {
+  left: 18px;
+  background: white;
+}
+
+/* ==================== 位置预设按钮 ==================== */
 .position-presets {
   display: flex;
-  gap: 8px;
+  gap: 6px;
 }
 
 .position-presets button {
   flex: 1;
-  padding: 8px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-secondary);
+  border-radius: 6px;
+  background: var(--bg-tertiary);
   color: var(--text-secondary);
   font-size: 12px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
 .position-presets button:hover {
-  background: var(--bg-tertiary);
+  background: var(--bg-secondary);
+  border-color: var(--primary);
+  color: var(--text-primary);
 }
 
 .position-presets button.active {
@@ -404,4 +514,23 @@ input[type="checkbox"] {
   color: white;
   border-color: var(--primary);
 }
+
+/* ==================== 动画网格 ==================== */
+.animation-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 360px) {
+  .form-row {
+    grid-template-columns: 1fr;
+  }
+  
+  .animation-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>
+
