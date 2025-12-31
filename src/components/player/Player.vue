@@ -285,8 +285,17 @@ function startRenderLoop() {
           return m?.type === 'video'
         })
         if (videoClip) {
-          localRenderTime = videoElement.currentTime - videoClip.inPoint + videoClip.startTime
-          syncedFromMedia = true
+          // 从视频元素时间反推时间线时间
+          // 确保结果在片段范围内
+          const clipMediaTime = videoElement.currentTime
+          const clipTimelineTime = clipMediaTime - videoClip.inPoint + videoClip.startTime
+          
+          // 边界保护：确保时间在片段范围内
+          if (clipTimelineTime >= videoClip.startTime && 
+              clipTimelineTime <= videoClip.startTime + videoClip.duration) {
+            localRenderTime = clipTimelineTime
+            syncedFromMedia = true
+          }
         }
       }
       
@@ -295,7 +304,10 @@ function startRenderLoop() {
         localRenderTime += deltaTime
       }
       
-      // 边界检查
+      // 边界检查：确保不超出范围
+      localRenderTime = Math.max(0, Math.min(localRenderTime, timelineStore.duration))
+      
+      // 到达末尾时停止
       if (localRenderTime >= timelineStore.duration) {
         timelineStore.pause()
         localRenderTime = 0
