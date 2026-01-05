@@ -8,6 +8,7 @@ import {
   Mp4OutputFormat,
   BufferTarget,
   CanvasSource,
+  AudioBufferSource,
   QUALITY_HIGH,
   QUALITY_MEDIUM,
   QUALITY_LOW
@@ -128,6 +129,7 @@ export class WebCodecsExporter {
     const { 
       clips, 
       subtitleClips = [], 
+      audioClips = [],
       width, 
       height, 
       frameRate, 
@@ -166,6 +168,9 @@ export class WebCodecsExporter {
     })
     output.addVideoTrack(videoSource)
 
+    // 添加音频轨道（如果有音频片段）
+    let audioSource: AudioBufferSource | null = null
+    
     // 计算时间线总时长（基于所有片段的最大结束时间）
     const sortedClips = [...clips].sort((a, b) => a.startTime - b.startTime)
     let totalDuration = 0
@@ -184,14 +189,67 @@ export class WebCodecsExporter {
         totalDuration = subEnd
       }
     }
+    
+    // 也考虑音频的结束时间
+    for (const audio of audioClips) {
+      const audioEnd = audio.startTime + audio.duration
+      if (audioEnd > totalDuration) {
+        totalDuration = audioEnd
+      }
+    }
 
     const totalFrames = Math.ceil(totalDuration * frameRate)
     const frameDuration = 1 / frameRate  // 每帧时长（秒）
 
     console.log(`[WebCodecsExporter] 总帧数: ${totalFrames}, 总时长: ${totalDuration.toFixed(2)}s`)
 
+    // 混合音频（如果有音频片段）- 先混合，稍后在 start() 之后添加
+    let mixedBuffer: AudioBuffer | null = null
+    
+    if (audioClips.length > 0) {
+      console.log(`[WebCodecsExporter] 混合 ${audioClips.length} 个音频片段`)
+      
+      const sampleRate = audioClips[0].audioBuffer.sampleRate
+      const numberOfChannels = Math.max(...audioClips.map(a => a.audioBuffer.numberOfChannels))
+      const outputLength = Math.ceil(totalDuration * sampleRate)
+      
+      // 使用 OfflineAudioContext 混合音频
+      const offlineCtx = new OfflineAudioContext(numberOfChannels, outputLength, sampleRate)
+      
+      for (const audioClip of audioClips) {
+        const source = offlineCtx.createBufferSource()
+        source.buffer = audioClip.audioBuffer
+        
+        // 应用音量
+        const gainNode = offlineCtx.createGain()
+        gainNode.gain.value = audioClip.volume
+        
+        source.connect(gainNode)
+        gainNode.connect(offlineCtx.destination)
+        
+        // 从 inPoint 开始，在 startTime 位置播放
+        source.start(audioClip.startTime, audioClip.inPoint, audioClip.duration)
+      }
+      
+      mixedBuffer = await offlineCtx.startRendering()
+      console.log(`[WebCodecsExporter] 音频混合完成: ${mixedBuffer.duration.toFixed(2)}s`)
+      
+      // 创建音频源并添加到输出（但不添加数据，留到 start() 之后）
+      audioSource = new AudioBufferSource({
+        codec: 'aac',
+        bitrate: 128_000  // 128kbps
+      })
+      output.addAudioTrack(audioSource)
+    }
+
     // 启动输出
     await output.start()
+    
+    // 在 start() 之后添加混合后的音频
+    if (audioSource && mixedBuffer) {
+      await audioSource.add(mixedBuffer)
+      console.log(`[WebCodecsExporter] 音频已添加到输出`)
+    }
 
     // 按时间线时间逐帧处理
     for (let frameIndex = 0; frameIndex < totalFrames && !this.aborted; frameIndex++) {

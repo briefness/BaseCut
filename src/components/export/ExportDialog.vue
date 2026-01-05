@@ -139,6 +139,48 @@ const exportableSubtitles = computed(() => {
   return subtitles.sort((a, b) => a.startTime - b.startTime)
 })
 
+// 音频片段信息（用于准备 AudioBuffer）
+interface AudioClipInfo {
+  materialId: string
+  file?: File
+  url?: string
+  startTime: number
+  duration: number
+  inPoint: number
+  outPoint: number
+  volume: number
+}
+
+// 获取可导出的音频片段信息
+const exportableAudioInfo = computed(() => {
+  const audioInfos: AudioClipInfo[] = []
+  
+  // 遍历所有 audio 类型轨道
+  for (const track of timelineStore.tracks) {
+    if (track.type !== 'audio') continue
+    
+    for (const clip of track.clips) {
+      if (!clip.materialId) continue
+      
+      const material = resourceStore.getMaterial(clip.materialId)
+      if (!material || material.type !== 'audio') continue
+      
+      audioInfos.push({
+        materialId: clip.materialId,
+        file: material.file,
+        url: material.blobUrl,  // 使用 blobUrl
+        startTime: clip.startTime,
+        duration: clip.duration,
+        inPoint: clip.inPoint,
+        outPoint: clip.outPoint,
+        volume: clip.volume ?? 0.4  // 默认音量 0.4
+      })
+    }
+  }
+  
+  return audioInfos.sort((a, b) => a.startTime - b.startTime)
+})
+
 // 检查是否可以导出
 const canExport = computed(() => {
   return exportableClips.value.length > 0 && !isExporting.value
@@ -193,15 +235,52 @@ async function exportWithWebCodecs(): Promise<Blob> {
     })
   }
   
+  // 准备音频片段（解码为 AudioBuffer）
+  const audioClips: import('@/engine/WebCodecsExporter').WebCodecsAudioClip[] = []
+  const audioContext = new AudioContext()
+  
+  for (const audioInfo of exportableAudioInfo.value) {
+    try {
+      let audioBuffer: AudioBuffer | null = null
+      
+      // 优先使用 File，其次使用 blobUrl
+      if (audioInfo.file) {
+        const arrayBuffer = await audioInfo.file.arrayBuffer()
+        audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+      } else if (audioInfo.url) {
+        const response = await fetch(audioInfo.url)
+        const arrayBuffer = await response.arrayBuffer()
+        audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+      }
+      
+      if (audioBuffer) {
+        audioClips.push({
+          audioBuffer,
+          startTime: audioInfo.startTime,
+          duration: audioInfo.duration,
+          inPoint: audioInfo.inPoint,
+          outPoint: audioInfo.outPoint,
+          volume: audioInfo.volume
+        })
+        console.log(`[ExportDialog] 音频解码成功: ${audioInfo.materialId}`)
+      }
+    } catch (e) {
+      console.warn(`[ExportDialog] 音频解码失败: ${audioInfo.materialId}`, e)
+    }
+  }
+  
+  await audioContext.close()
+  
   // 设置进度回调
   webCodecsExporter.onProgress((progress) => {
     exportProgress.value = Math.round(progress * 100)
   })
   
-  // 导出视频（包含字幕）
+  // 导出视频（包含字幕和音频）
   return webCodecsExporter.export({
     clips: webCodecsClips,
     subtitleClips: exportableSubtitles.value,
+    audioClips: audioClips.length > 0 ? audioClips : undefined,
     width: exportResolution.value.width,
     height: exportResolution.value.height,
     frameRate: projectStore.frameRate,
