@@ -203,6 +203,47 @@ export interface Effect {
   params: Record<string, number | string | boolean>
 }
 
+// ==================== 转场类型 ====================
+export type TransitionType = 
+  | 'fade'        // 淡入淡出
+  | 'slideLeft'   // 从左滑入
+  | 'slideRight'  // 从右滑入
+  | 'slideUp'     // 从上滑入
+  | 'slideDown'   // 从下滑入
+  | 'zoom'        // 缩放
+  | 'blur'        // 模糊过渡
+  | 'wipe'        // 擦除
+  | 'dissolve'    // 溶解
+
+export interface Transition {
+  id: string
+  type: TransitionType
+  duration: number      // 转场时长（秒），默认 0.5
+  clipAId: string       // 前一个片段 ID
+  clipBId: string       // 后一个片段 ID
+}
+
+// 转场效果预设
+export interface TransitionPreset {
+  type: TransitionType
+  name: string          // 显示名称
+  icon: string          // 图标
+  defaultDuration: number
+}
+
+// 预定义的转场效果列表
+export const TRANSITION_PRESETS: TransitionPreset[] = [
+  { type: 'fade', name: '淡入淡出', icon: '🌅', defaultDuration: 0.5 },
+  { type: 'dissolve', name: '溶解', icon: '✨', defaultDuration: 0.5 },
+  { type: 'slideLeft', name: '向左滑动', icon: '⬅️', defaultDuration: 0.5 },
+  { type: 'slideRight', name: '向右滑动', icon: '➡️', defaultDuration: 0.5 },
+  { type: 'slideUp', name: '向上滑动', icon: '⬆️', defaultDuration: 0.5 },
+  { type: 'slideDown', name: '向下滑动', icon: '⬇️', defaultDuration: 0.5 },
+  { type: 'zoom', name: '缩放', icon: '🔍', defaultDuration: 0.5 },
+  { type: 'blur', name: '模糊', icon: '🌫️', defaultDuration: 0.5 },
+  { type: 'wipe', name: '擦除', icon: '🧹', defaultDuration: 0.5 },
+]
+
 // ==================== 滤镜参数 ====================
 export interface FilterParams {
   brightness: number  // -100 ~ 100

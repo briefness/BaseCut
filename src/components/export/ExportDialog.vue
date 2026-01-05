@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import { ffmpegCore, type ExportClip, type ExportOptions } from '@/engine/FFmpegCore'
-import { WebCodecsExporter, webCodecsExporter, type WebCodecsExportClip } from '@/engine/WebCodecsExporter'
+import { WebCodecsExporter, webCodecsExporter, type WebCodecsExportClip, type WebCodecsTransition } from '@/engine/WebCodecsExporter'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
@@ -218,10 +218,11 @@ function reset() {
 
 // 使用 WebCodecs 导出
 async function exportWithWebCodecs(): Promise<Blob> {
-  // 准备视频元素
+  // 准备视频元素 - 先按时间排序，确保与转场索引匹配
+  const sortedExportableClips = [...exportableClips.value].sort((a, b) => a.startTime - b.startTime)
   const webCodecsClips: WebCodecsExportClip[] = []
   
-  for (const clip of exportableClips.value) {
+  for (const clip of sortedExportableClips) {
     const videoElement = await WebCodecsExporter.createVideoElement(
       URL.createObjectURL(clip.file)
     )
@@ -276,11 +277,47 @@ async function exportWithWebCodecs(): Promise<Blob> {
     exportProgress.value = Math.round(progress * 100)
   })
   
-  // 导出视频（包含字幕和音频）
+  // 构建转场信息
+  const exportTransitions: WebCodecsTransition[] = []
+  
+  for (const trans of timelineStore.transitions) {
+    // 找到导出片段中对应的索引
+    const clipAIndex = sortedExportableClips.findIndex(c => {
+      const track = timelineStore.tracks.find(t => 
+        t.clips.some(tc => tc.id === trans.clipAId)
+      )
+      const sourceClip = track?.clips.find(tc => tc.id === trans.clipAId)
+      return sourceClip && Math.abs(c.startTime - sourceClip.startTime) < 0.01
+    })
+    
+    const clipBIndex = sortedExportableClips.findIndex(c => {
+      const track = timelineStore.tracks.find(t => 
+        t.clips.some(tc => tc.id === trans.clipBId)
+      )
+      const sourceClip = track?.clips.find(tc => tc.id === trans.clipBId)
+      return sourceClip && Math.abs(c.startTime - sourceClip.startTime) < 0.01
+    })
+    
+    console.log(`[ExportDialog] 转场: ${trans.type}, clipA=${clipAIndex}, clipB=${clipBIndex}`)
+    
+    if (clipAIndex !== -1 && clipBIndex !== -1) {
+      exportTransitions.push({
+        clipAIndex,
+        clipBIndex,
+        type: trans.type,
+        duration: trans.duration
+      })
+    }
+  }
+  
+  console.log(`[ExportDialog] 导出转场数: ${exportTransitions.length}`, exportTransitions)
+  
+  // 导出视频（包含字幕、音频和转场）
   return webCodecsExporter.export({
     clips: webCodecsClips,
     subtitleClips: exportableSubtitles.value,
     audioClips: audioClips.length > 0 ? audioClips : undefined,
+    transitions: exportTransitions.length > 0 ? exportTransitions : undefined,
     width: exportResolution.value.width,
     height: exportResolution.value.height,
     frameRate: projectStore.frameRate,

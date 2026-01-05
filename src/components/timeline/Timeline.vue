@@ -994,4 +994,44 @@ onUnmounted(() => {
   background: var(--error);
   transform: translateX(-1px);
 }
+
+/* 转场按钮 */
+.transition-btn {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--border-primary);
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: all 0.15s;
+  z-index: 10;
+}
+
+.clip:hover .transition-btn {
+  opacity: 1;
+}
+
+.transition-btn:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: white;
+  transform: translateY(-50%) scale(1.1);
+}
+
+/* 转场遮罩 */
+.transition-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
 </style>

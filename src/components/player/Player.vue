@@ -25,6 +25,10 @@ let currentAudioMaterialId: string | null = null  // 当前加载的音频素材
 let lastVideoClipId: string | null = null  // 上一个渲染的视频片段 ID
 let needsInitialSeek = false  // 是否需要初始 seek
 
+// 转场渲染相关
+let transitionVideoB: HTMLVideoElement | null = null  // 转场回退用视频元素
+const frameImageCache = new Map<string, HTMLImageElement>()  // 转场帧图片缓存
+
 // 显示尺寸（根据容器自适应）
 const displaySize = ref({ width: 640, height: 360 })
 
@@ -206,6 +210,11 @@ onMounted(() => {
   audioElement.preload = 'auto'
   audioElement.volume = timelineStore.volume
   
+  // 初始化转场回退视频元素
+  transitionVideoB = document.createElement('video')
+  transitionVideoB.muted = true
+  transitionVideoB.preload = 'auto'
+  
   window.addEventListener('resize', updateDisplaySize)
   document.addEventListener('fullscreenchange', onFullscreenChange)
   
@@ -373,7 +382,40 @@ function renderThumbnailFrame(frameUrl: string, cacheKey: string) {
 }
 
 // 渲染当前帧
+  // 预加载转场视频（提前 1.5 秒）
+  const checkPreloadTransition = (currentTime: number) => {
+    // 简单遍历查找下一个即将到来的转场
+    for (const transition of timelineStore.transitions) {
+      const track = timelineStore.tracks.find(t => t.clips.some(c => c.id === transition.clipBId))
+      const clipB = track?.clips.find(c => c.id === transition.clipBId)
+      
+      if (clipB) {
+        const transitionStart = clipB.startTime - transition.duration / 2
+        
+        // 如果转场在未来 1.5 秒内，且尚未加载
+        if (transitionStart > currentTime && transitionStart < currentTime + 1.5) {
+           const materialB = resourceStore.getMaterial(clipB.materialId ?? '')
+           const videoUrlB = materialB?.hlsUrl ?? materialB?.blobUrl ?? ''
+           
+           if (videoUrlB && transitionVideoB && transitionVideoB.src !== videoUrlB) {
+             console.log('[Player] Preloading transition video:', videoUrlB)
+             transitionVideoB.src = videoUrlB
+             transitionVideoB.load()
+             // 预加载不播放
+             transitionVideoB.pause()
+             transitionVideoB.currentTime = clipB.inPoint
+           }
+           break
+        }
+      }
+    }
+  }
+
 function renderCurrentFrame(renderTime: number) {
+    // 检查预加载
+    if (timelineStore.isPlaying) {
+      checkPreloadTransition(renderTime)
+    }
   if (!renderer || !videoElement) return
   
   // 同步音量
@@ -382,11 +424,100 @@ function renderCurrentFrame(renderTime: number) {
   // 获取当前时间点的所有活跃片段（使用传入的渲染时间）
   const activeClips = timelineStore.getActiveClips(renderTime)
   
+  // 检查是否在转场区域
+  const transitionInfo = timelineStore.getTransitionAt(renderTime)
+  if (transitionInfo) {
+    // 在转场区域，使用 WebGL GPU 加速渲染
+    const { transition, progress, clipA, clipB } = transitionInfo
+    
+    const materialA = resourceStore.getMaterial(clipA.materialId ?? '')
+    const materialB = resourceStore.getMaterial(clipB.materialId ?? '')
+    
+    if (materialA && materialB) {
+      // 计算两个片段的时间点
+      const clipTimeA = renderTime - clipA.startTime + clipA.inPoint
+      const clipTimeB = renderTime - clipB.startTime + clipB.inPoint
+      
+      // 获取缩略图帧
+      const filmstripA = frameExtractor.getFilmstripCache(materialA.id)
+      const filmstripB = frameExtractor.getFilmstripCache(materialB.id)
+      
+      // 获取帧图片
+      const getFrameImage = (filmstrip: { frames: string[]; interval: number } | null, clipTime: number): HTMLImageElement | null => {
+        if (!filmstrip || filmstrip.frames.length === 0) return null
+        
+        const frameIndex = Math.min(
+          Math.floor(clipTime / filmstrip.interval),
+          filmstrip.frames.length - 1
+        )
+        const frameUrl = filmstrip.frames[Math.max(0, frameIndex)]
+        
+        const cachedImg = frameImageCache.get(frameUrl)
+        if (cachedImg && cachedImg.complete) return cachedImg
+        
+        if (!cachedImg) {
+          const img = new Image()
+          img.src = frameUrl
+          frameImageCache.set(frameUrl, img)
+        }
+        
+        return null
+      }
+      
+      const frameA = getFrameImage(filmstripA, clipTimeA)
+      const frameB = getFrameImage(filmstripB, clipTimeB)
+      
+      // 使用 WebGL GPU 加速转场渲染（更丝滑）
+      if (frameA && frameB && renderer) {
+        renderer.renderTransition(frameA, frameB, progress, transition.type)
+        
+        const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+        renderSubtitles(subtitleTime)
+        return
+      }
+      
+      // 回退：使用视频元素
+      if (videoElement.readyState >= 2 && transitionVideoB && transitionVideoB.readyState >= 2 && renderer) {
+        const videoUrlB = materialB.hlsUrl ?? materialB.blobUrl ?? ''
+        if (transitionVideoB.src !== videoUrlB && videoUrlB) {
+          transitionVideoB.src = videoUrlB
+          transitionVideoB.load()
+        }
+        
+        // 优化：播放状态下使用 play() 保持同步，而不是每帧 seek
+        if (timelineStore.isPlaying && transitionVideoB.paused) {
+           transitionVideoB.play().catch(() => {})
+        } else if (!timelineStore.isPlaying && !transitionVideoB.paused) {
+           transitionVideoB.pause()
+        }
+        
+        // 只在时间漂移较大时进行修正
+        if (Math.abs(transitionVideoB.currentTime - clipTimeB) > 0.1) {
+          transitionVideoB.currentTime = clipTimeB
+        }
+        
+        renderer.renderTransition(videoElement, transitionVideoB, progress, transition.type)
+        const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+        renderSubtitles(subtitleTime)
+        return
+      }
+    }
+  }
+  
   // 找到视频片段
-  const videoClip = activeClips.find(c => {
+  let videoClip = activeClips.find(c => {
     const material = resourceStore.getMaterial(c.materialId ?? '')
     return material?.type === 'video'
   })
+  
+  // [修复] 转场连贯性：转场期间强制 Main Player 保持在 Clip A
+  // 避免转场中途 Main Player 切换到 Clip B 导致画面跳变
+  if (transitionInfo && transitionInfo.clipA) {
+    const materialA = resourceStore.getMaterial(transitionInfo.clipA.materialId ?? '')
+    if (materialA && materialA.type === 'video') {
+       videoClip = transitionInfo.clipA
+    }
+  }
   
   // 找到图片片段
   const imageClip = activeClips.find(c => {
@@ -430,6 +561,14 @@ function renderCurrentFrame(renderTime: number) {
         } else if (videoElement && videoElement.readyState >= 2) {
           // 没有缩略图时使用视频当前帧
           renderer.renderFrame(videoElement)
+        } else if (transitionVideoB && transitionVideoB.readyState >= 2) {
+          // [修复] 平滑切换：如果 Main Player 尚未准备好（例如转场刚结束切换到 B），
+          // 尝试使用预加载了 B 的 Aux Player 进行渲染，避免黑屏
+          const material = resourceStore.getMaterial(videoClip.materialId ?? '')
+          const targetUrl = material?.hlsUrl ?? material?.blobUrl
+          if (targetUrl && transitionVideoB.src === targetUrl) {
+             renderer.renderFrame(transitionVideoB)
+          }
         }
         return
       }
@@ -466,8 +605,33 @@ function renderCurrentFrame(renderTime: number) {
         videoElement.pause()
       }
       
-      if (videoElement.readyState >= 2) {
+      // [修复] 防止源切换时的脏帧：如果正在切换片段(isNewClip)，
+      // 即使 readyState 还没变，也不应该渲染 videoElement（它可能还持有上一段的画面）
+      if (!isNewClip && videoElement.readyState >= 2) {
         renderer.renderFrame(videoElement)
+      } else if (transitionVideoB && transitionVideoB.readyState >= 2) {
+        // [修复] 平滑切换：如果 Main Player 尚未准备好（例如转场刚结束切换到 B），
+        // 尝试使用预加载了 B 的 Aux Player 进行渲染，避免黑屏
+        const material = resourceStore.getMaterial(videoClip.materialId ?? '')
+        const targetUrl = material?.hlsUrl ?? material?.blobUrl
+        if (targetUrl && transitionVideoB.src === targetUrl) {
+             // [修复] 确保在 Handoff 接管期间 Aux Player 保持同步播放，防止画面静止
+             // 1. 同步播放状态
+             if (timelineStore.isPlaying && transitionVideoB.paused) {
+               transitionVideoB.play().catch(() => {})
+             } else if (!timelineStore.isPlaying && !transitionVideoB.paused) {
+               transitionVideoB.pause()
+             }
+             
+             // 2. 同步时间漂移 (因为在转场结束后 transitionInfo 块不再执行同步逻辑)
+             const clipTime = renderTime - videoClip.startTime + videoClip.inPoint
+             if (Math.abs(transitionVideoB.currentTime - clipTime) > 0.1) {
+               transitionVideoB.currentTime = clipTime
+             }
+             
+             // console.log('[Player] Using Aux Player for smooth handoff')
+             renderer.renderFrame(transitionVideoB)
+        }
       }
     }
   } 

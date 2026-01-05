@@ -15,6 +15,7 @@ import {
 } from 'mediabunny'
 import type { Subtitle } from '@/types'
 import { subtitleRenderer, type RenderContext } from '@/utils/SubtitleRenderer'
+import { WebGLRenderer } from '@/engine/WebGLRenderer'
 
 // 导出片段信息
 export interface WebCodecsExportClip {
@@ -42,11 +43,20 @@ export interface WebCodecsAudioClip {
   volume: number                  // 音量 0-1，默认 0.4
 }
 
+// 转场信息
+export interface WebCodecsTransition {
+  clipAIndex: number              // 第一个片段索引
+  clipBIndex: number              // 第二个片段索引
+  type: string                    // 转场类型
+  duration: number                // 转场时长（秒）
+}
+
 // 导出选项
 export interface WebCodecsExportOptions {
   clips: WebCodecsExportClip[]           // 视频片段列表
   subtitleClips?: WebCodecsSubtitleClip[] // 字幕片段列表
   audioClips?: WebCodecsAudioClip[]      // 音频片段列表
+  transitions?: WebCodecsTransition[]     // 转场列表
   width: number                   // 输出宽度
   height: number                  // 输出高度
   frameRate: number               // 帧率
@@ -57,6 +67,7 @@ export interface WebCodecsExportOptions {
 export class WebCodecsExporter {
   private progressCallback: ((progress: number) => void) | null = null
   private aborted = false
+  private renderer: WebGLRenderer | null = null
 
   /**
    * 检测浏览器是否支持 WebCodecs
@@ -130,6 +141,7 @@ export class WebCodecsExporter {
       clips, 
       subtitleClips = [], 
       audioClips = [],
+      transitions = [],
       width, 
       height, 
       frameRate, 
@@ -143,11 +155,20 @@ export class WebCodecsExporter {
 
     console.log(`[WebCodecsExporter] 开始导出: ${clips.length} 个视频, ${subtitleClips.length} 个字幕, ${width}x${height}@${frameRate}fps`)
 
-    // 创建离屏画布
+    console.log(`[WebCodecsExporter] 开始导出: ${clips.length} 个视频, ${subtitleClips.length} 个字幕, ${width}x${height}@${frameRate}fps`)
+
+    // 1. 创建 WebGL 画布（用于视频渲染）
+    const webglCanvas = document.createElement('canvas')
+    webglCanvas.width = width
+    webglCanvas.height = height
+    this.renderer = new WebGLRenderer(webglCanvas)
+
+    // 2. 创建合成画布（用于字幕叠加和最终输出）
     const canvas = document.createElement('canvas')
     canvas.width = width
     canvas.height = height
-    const ctx = canvas.getContext('2d')
+    // @ts-ignore
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })
     if (!ctx) {
       throw new Error('无法创建 Canvas 上下文')
     }
@@ -255,25 +276,80 @@ export class WebCodecsExporter {
     for (let frameIndex = 0; frameIndex < totalFrames && !this.aborted; frameIndex++) {
       const timelineTime = frameIndex / frameRate
       
-      // 清空画布（黑色背景）
-      ctx.fillStyle = '#000000'
-      ctx.fillRect(0, 0, width, height)
-      
-      // 1. 查找当前时间活跃的视频片段
-      const activeClip = sortedClips.find(clip => 
-        timelineTime >= clip.startTime && 
-        timelineTime < clip.startTime + clip.duration
-      )
-      
-      // 2. 渲染视频帧
-      if (activeClip) {
-        const clipTime = activeClip.inPoint + (timelineTime - activeClip.startTime)
-        activeClip.videoElement.currentTime = clipTime
-        await this.waitForSeek(activeClip.videoElement)
-        ctx.drawImage(activeClip.videoElement, 0, 0, width, height)
+      // 1. 检查是否在转场区域
+      let isInTransition = false
+      for (const trans of transitions) {
+        // [修复] 转场索引是基于原始 clips 列表的，不能使用排序后的 sortedClips
+        const clipA = clips[trans.clipAIndex]
+        const clipB = clips[trans.clipBIndex]
+        if (!clipA || !clipB) continue
+        
+        // 转场区域：clipB 开始时间为中心
+        const transitionStart = clipB.startTime - trans.duration / 2
+        const transitionEnd = clipB.startTime + trans.duration / 2
+        
+        if (timelineTime >= transitionStart && timelineTime < transitionEnd) {
+          isInTransition = true
+          const progress = (timelineTime - transitionStart) / trans.duration
+          
+          // 首帧输出调试信息
+          if (frameIndex % 30 === 0) {
+            console.log(`[WebCodecsExporter] WebGL渲染转场: ${trans.type}, time=${timelineTime.toFixed(2)}, progress=${progress.toFixed(2)}`)
+          }
+          // 缓动函数：easeInOutCubic
+          const easedProgress = progress < 0.5 
+            ? 4 * progress * progress * progress 
+            : 1 - Math.pow(-2 * progress + 2, 3) / 2
+          
+          // 渲染帧 A
+          const clipTimeA = clipA.inPoint + (timelineTime - clipA.startTime)
+          clipA.videoElement.currentTime = Math.max(0, clipTimeA)
+          await this.waitForSeek(clipA.videoElement)
+          
+          // 渲染帧 B
+          const clipTimeB = clipB.inPoint + (timelineTime - clipB.startTime)
+          clipB.videoElement.currentTime = Math.max(0, clipTimeB)
+          await this.waitForSeek(clipB.videoElement)
+          
+          // 使用 WebGL 硬件加速渲染转场
+          if (this.renderer) {
+            this.renderer.renderTransition(
+              clipA.videoElement,
+              clipB.videoElement,
+              easedProgress,
+              trans.type
+            )
+          }
+          break
+        }
       }
       
-      // 3. 渲染字幕（叠加在视频上）
+      // 2. 如果不在转场区域，正常渲染单帧
+      if (!isInTransition) {
+        const activeClip = sortedClips.find(clip => 
+          timelineTime >= clip.startTime && 
+          timelineTime < clip.startTime + clip.duration
+        )
+        
+        if (activeClip && this.renderer) {
+          const clipTime = activeClip.inPoint + (timelineTime - activeClip.startTime)
+          activeClip.videoElement.currentTime = clipTime
+          await this.waitForSeek(activeClip.videoElement)
+          // WebGL 渲染单帧
+          this.renderer.renderFrame(activeClip.videoElement)
+        } else if (this.renderer) {
+           // 黑屏 (WebGL渲染器负责清空)
+           this.renderer.clear()
+        }
+      }
+      
+      // 3. 将 WebGL 画布内容绘制到合成画布
+      if (webglCanvas) {
+         ctx.drawImage(webglCanvas, 0, 0)
+      }
+      
+      // 4. 渲染字幕（叠加在视频上）
+      // 使用合成画布的 ctx（2D）
       for (const subClip of subtitleClips) {
         if (timelineTime >= subClip.startTime && 
             timelineTime < subClip.startTime + subClip.duration) {
@@ -285,11 +361,11 @@ export class WebCodecsExporter {
             clipStartTime: subClip.startTime,
             clipDuration: subClip.duration
           }
-          subtitleRenderer.render(subClip.subtitle, renderContext)
+           subtitleRenderer.render(subClip.subtitle, renderContext)
         }
       }
       
-      // 4. 使用正确的 Mediabunny API 添加帧
+      // 5. 使用正确的 Mediabunny API 添加帧
       // add(timestamp, duration) - timestamp 和 duration 都是秒
       await videoSource.add(timelineTime, frameDuration)
 
@@ -325,31 +401,52 @@ export class WebCodecsExporter {
   /**
    * 等待视频 seek 完成
    */
-  private waitForSeek(video: HTMLVideoElement): Promise<void> {
-    return new Promise((resolve) => {
-      if (video.readyState >= 2) {
-        // 已经可以播放
+  /**
+   * 等待视频 seek 完成并确保帧已渲染
+   */
+  private async waitForSeek(video: HTMLVideoElement): Promise<void> {
+    // 1. 等待 seeking 结束
+    if (video.seeking) {
+      await new Promise<void>(resolve => {
         const onSeeked = () => {
           video.removeEventListener('seeked', onSeeked)
           resolve()
         }
-        video.addEventListener('seeked', onSeeked)
-        
-        // 如果当前时间已设置，可能不会触发 seeked
-        setTimeout(() => {
-          video.removeEventListener('seeked', onSeeked)
-          resolve()
-        }, 50)
-      } else {
-        // 等待视频加载
+        video.addEventListener('seeked', onSeeked, { once: true })
+      })
+    } else if (video.readyState < 2) {
+      // 还没加载好数据
+      await new Promise<void>(resolve => {
         const onCanPlay = () => {
           video.removeEventListener('canplay', onCanPlay)
           resolve()
         }
-        video.addEventListener('canplay', onCanPlay)
-      }
-    })
+        video.addEventListener('canplay', onCanPlay, { once: true })
+      })
+    }
+
+    // 2. 关键：等待帧实际上传到 GPU/合成器
+    // 解决快速 seek 时画面未更新导致"跳帧"或"黑屏"的问题
+    if ('requestVideoFrameCallback' in video) {
+      await Promise.race([
+        new Promise<void>(resolve => {
+          // @ts-ignore - TS 可能还没包含这个 API 定义
+          video.requestVideoFrameCallback(() => {
+             // console.log('[Exporter] Frame synced via rVFC')
+             resolve()
+          })
+        }),
+        // [修复] 防止 rVFC 在后台或未挂载元素上不触发导致的死锁
+        // 设置 100ms 超时强制继续
+        new Promise<void>(resolve => setTimeout(resolve, 100))
+      ])
+    } else {
+      // 降级方案
+      await new Promise(resolve => setTimeout(resolve, 50))
+    }
   }
+
+
 
   /**
    * 从 URL 创建视频元素

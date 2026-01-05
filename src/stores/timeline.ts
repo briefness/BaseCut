@@ -4,7 +4,7 @@
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import type { Track, Clip, TrackType, PlaybackState } from '@/types'
+import type { Track, Clip, TrackType, PlaybackState, Transition, TransitionType } from '@/types'
 
 export const useTimelineStore = defineStore('timeline', () => {
   // ==================== 状态 ====================
@@ -20,6 +20,9 @@ export const useTimelineStore = defineStore('timeline', () => {
   // 拖拽预览状态
   const isSeeking = ref(false)      // 是否正在拖动时间轴
   const seekingTime = ref(0)        // 拖动时的预览时间点
+  
+  // 转场效果
+  const transitions = ref<Transition[]>([])
 
   // ==================== 计算属性 ====================
   const videoTracks = computed(() => 
@@ -447,6 +450,109 @@ export const useTimelineStore = defineStore('timeline', () => {
     return activeClips
   }
 
+  // ==================== 转场操作 ====================
+  
+  /**
+   * 添加转场效果
+   */
+  function addTransition(clipAId: string, clipBId: string, type: TransitionType, duration: number = 0.5): Transition | null {
+    // 验证两个片段存在
+    let clipA: Clip | undefined
+    let clipB: Clip | undefined
+    
+    for (const track of tracks.value) {
+      for (const clip of track.clips) {
+        if (clip.id === clipAId) clipA = clip
+        if (clip.id === clipBId) clipB = clip
+      }
+    }
+    
+    if (!clipA || !clipB) {
+      console.warn('[Timeline] 转场片段不存在')
+      return null
+    }
+    
+    // 检查是否已存在转场
+    const existing = transitions.value.find(
+      t => t.clipAId === clipAId && t.clipBId === clipBId
+    )
+    if (existing) {
+      // 更新现有转场
+      existing.type = type
+      existing.duration = duration
+      return existing
+    }
+    
+    // 创建新转场
+    const transition: Transition = {
+      id: crypto.randomUUID(),
+      type,
+      duration,
+      clipAId,
+      clipBId
+    }
+    
+    transitions.value.push(transition)
+    console.log(`[Timeline] 添加转场: ${type}, 时长: ${duration}s`)
+    return transition
+  }
+  
+  /**
+   * 移除转场效果
+   */
+  function removeTransition(transitionId: string): void {
+    const index = transitions.value.findIndex(t => t.id === transitionId)
+    if (index !== -1) {
+      transitions.value.splice(index, 1)
+      console.log('[Timeline] 移除转场')
+    }
+  }
+  
+  /**
+   * 获取两个片段之间的转场
+   */
+  function getTransitionBetween(clipAId: string, clipBId: string): Transition | null {
+    return transitions.value.find(
+      t => t.clipAId === clipAId && t.clipBId === clipBId
+    ) ?? null
+  }
+  
+  /**
+   * 获取指定时间点的转场信息
+   * @returns 转场信息和进度，如果不在转场区域则返回 null
+   */
+  function getTransitionAt(time: number): { transition: Transition; progress: number; clipA: Clip; clipB: Clip } | null {
+    // 快速检查：没有转场直接返回
+    if (transitions.value.length === 0) return null
+    
+    // 构建片段查找缓存（避免重复遍历）
+    const clipMap = new Map<string, Clip>()
+    for (const track of tracks.value) {
+      for (const clip of track.clips) {
+        clipMap.set(clip.id, clip)
+      }
+    }
+    
+    for (const transition of transitions.value) {
+      const clipA = clipMap.get(transition.clipAId)
+      const clipB = clipMap.get(transition.clipBId)
+      
+      if (!clipA || !clipB) continue
+      
+      // 转场区域计算
+      const clipBStart = clipB.startTime
+      const transitionStart = clipBStart - transition.duration / 2
+      const transitionEnd = clipBStart + transition.duration / 2
+      
+      if (time >= transitionStart && time < transitionEnd) {
+        const progress = (time - transitionStart) / transition.duration
+        return { transition, progress, clipA, clipB }
+      }
+    }
+    
+    return null
+  }
+
   /**
    * 重置时间线
    */
@@ -470,6 +576,7 @@ export const useTimelineStore = defineStore('timeline', () => {
     zoom,
     isSeeking,
     seekingTime,
+    transitions,
     // 计算属性
     videoTracks,
     audioTracks,
@@ -489,6 +596,11 @@ export const useTimelineStore = defineStore('timeline', () => {
     moveClipToTrack,
     selectClip,
     splitClip,
+    // 转场操作
+    addTransition,
+    removeTransition,
+    getTransitionBetween,
+    getTransitionAt,
     // 播放控制
     play,
     pause,

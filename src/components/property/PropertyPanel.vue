@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
 import SubtitleEditor from './SubtitleEditor.vue'
+import { TRANSITION_PRESETS, type TransitionType } from '@/types'
 
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
@@ -45,6 +46,51 @@ function updateClipProperty(key: string, value: number | string) {
   if (!selectedClip.value) return
   timelineStore.updateClip(selectedClip.value.id, { [key]: value })
   projectStore.markDirty()
+}
+
+// 是否是视频片段
+const isVideoClip = computed(() => selectedTrackType.value === 'video')
+
+// 获取下一个相邻片段（用于转场设置）
+const nextClip = computed(() => {
+  if (!selectedClip.value || !isVideoClip.value) return null
+  
+  const track = timelineStore.tracks.find(t => t.id === selectedClip.value?.trackId)
+  if (!track) return null
+  
+  const sortedClips = [...track.clips].sort((a, b) => a.startTime - b.startTime)
+  const currentIndex = sortedClips.findIndex(c => c.id === selectedClip.value?.id)
+  if (currentIndex === -1 || currentIndex === sortedClips.length - 1) return null
+  
+  const next = sortedClips[currentIndex + 1]
+  // 检查是否相邻（允许 1 秒间隙）
+  const gap = next.startTime - (selectedClip.value!.startTime + selectedClip.value!.duration)
+  if (gap <= 1) return next
+  return null
+})
+
+// 当前转场效果
+const currentTransition = computed(() => {
+  if (!selectedClip.value || !nextClip.value) return null
+  return timelineStore.getTransitionBetween(selectedClip.value.id, nextClip.value.id)
+})
+
+// 转场时长
+const transitionDuration = ref(0.5)
+
+// 选择转场效果
+function selectTransition(type: TransitionType): void {
+  if (!selectedClip.value || !nextClip.value) return
+  timelineStore.addTransition(selectedClip.value.id, nextClip.value.id, type, transitionDuration.value)
+  projectStore.markDirty()
+}
+
+// 移除转场
+function removeTransition(): void {
+  if (currentTransition.value) {
+    timelineStore.removeTransition(currentTransition.value.id)
+    projectStore.markDirty()
+  }
 }
 
 // 删除片段
@@ -164,6 +210,33 @@ function deleteClip() {
               @change="(e) => updateClipProperty('volume', Math.min(100, Math.max(0, Number((e.target as HTMLInputElement).value))))"
             />
           </div>
+        </section>
+
+        <!-- 转场效果（视频片段且有下一个相邻片段时显示） -->
+        <section v-if="isVideoClip && nextClip" class="property-section">
+          <h4>转场效果</h4>
+          <p class="transition-hint">与下一个片段之间的转场</p>
+          
+          <div class="transition-grid">
+            <div 
+              v-for="preset in TRANSITION_PRESETS"
+              :key="preset.type"
+              class="transition-item"
+              :class="{ active: currentTransition?.type === preset.type }"
+              @click="selectTransition(preset.type)"
+            >
+              <span class="transition-icon">{{ preset.icon }}</span>
+              <span class="transition-name">{{ preset.name }}</span>
+            </div>
+          </div>
+          
+          <button 
+            v-if="currentTransition"
+            class="btn btn-danger full-width mt-8"
+            @click="removeTransition"
+          >
+            移除转场
+          </button>
         </section>
 
         <!-- 字幕编辑器（文字轨道片段） -->
@@ -482,5 +555,63 @@ textarea.input {
 .audio-value-input::-webkit-outer-spin-button {
   -webkit-appearance: none;
   margin: 0;
+}
+
+/* 转场效果 */
+.transition-hint {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin: 0 0 8px 0;
+}
+
+.transition-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.transition-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 4px;
+  background: var(--bg-secondary);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.transition-item:hover {
+  background: var(--bg-tertiary);
+  border-color: var(--border-primary);
+}
+
+.transition-item.active {
+  background: var(--primary-bg);
+  border-color: var(--primary);
+}
+
+.transition-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.transition-name {
+  font-size: 10px;
+  color: var(--text-secondary);
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.transition-item.active .transition-name {
+  color: var(--primary);
+}
+
+.mt-8 {
+  margin-top: 8px;
 }
 </style>

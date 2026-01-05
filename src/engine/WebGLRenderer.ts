@@ -104,13 +104,122 @@ const FRAGMENT_SHADER = `
   }
 `
 
+// 转场片段着色器 - GPU 加速转场效果
+const TRANSITION_FRAGMENT_SHADER = `
+  precision mediump float;
+  
+  varying vec2 v_texCoord;
+  uniform sampler2D u_textureA;  // 第一个视频帧
+  uniform sampler2D u_textureB;  // 第二个视频帧
+  uniform float u_progress;       // 转场进度 0-1
+  uniform int u_transitionType;   // 转场类型
+  
+  // 缓动函数 - 使转场更丝滑
+  float easeInOutCubic(float t) {
+    return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
+  }
+  
+  float easeOutQuad(float t) {
+    return 1.0 - (1.0 - t) * (1.0 - t);
+  }
+  
+  void main() {
+    vec4 colorA = texture2D(u_textureA, v_texCoord);
+    vec4 colorB = texture2D(u_textureB, v_texCoord);
+    float p = easeInOutCubic(u_progress);
+    
+    vec4 result;
+    
+    // 0: fade 淡入淡出
+    if (u_transitionType == 0) {
+      result = mix(colorA, colorB, p);
+    }
+    // 1: dissolve 溶解（带噪点）
+    else if (u_transitionType == 1) {
+      float noise = fract(sin(dot(v_texCoord, vec2(12.9898, 78.233))) * 43758.5453);
+      float threshold = p * 1.2 - 0.1;
+      float blend = smoothstep(threshold - 0.1, threshold + 0.1, noise);
+      result = mix(colorA, colorB, blend);
+    }
+    // 2: slideLeft 向左滑动
+    else if (u_transitionType == 2) {
+      float offset = p;
+      vec2 coordA = v_texCoord + vec2(offset, 0.0);
+      vec2 coordB = v_texCoord + vec2(offset - 1.0, 0.0);
+      if (v_texCoord.x < 1.0 - offset) {
+        result = texture2D(u_textureA, coordA);
+      } else {
+        result = texture2D(u_textureB, coordB);
+      }
+    }
+    // 3: slideRight 向右滑动
+    else if (u_transitionType == 3) {
+      float offset = p;
+      vec2 coordA = v_texCoord - vec2(offset, 0.0);
+      vec2 coordB = v_texCoord + vec2(1.0 - offset, 0.0);
+      if (v_texCoord.x > offset) {
+        result = texture2D(u_textureA, coordA);
+      } else {
+        result = texture2D(u_textureB, coordB);
+      }
+    }
+    // 4: wipe 擦除
+    else if (u_transitionType == 4) {
+      float edge = p;
+      float softness = 0.05;
+      float blend = smoothstep(edge - softness, edge + softness, v_texCoord.x);
+      result = mix(colorA, colorB, blend);
+    }
+    // 5: zoom 缩放
+    else if (u_transitionType == 5) {
+      float scale = 1.0 + p * 0.5;
+      vec2 center = vec2(0.5, 0.5);
+      vec2 scaledCoord = (v_texCoord - center) / scale + center;
+      vec4 scaledA = texture2D(u_textureA, clamp(scaledCoord, 0.0, 1.0));
+      result = mix(scaledA, colorB, p);
+    }
+    // 6: blur 模糊过渡
+    else if (u_transitionType == 6) {
+      result = mix(colorA, colorB, p);
+    }
+    // 7: slideUp 向上滑动
+    else if (u_transitionType == 7) {
+      float offset = p;
+      if (v_texCoord.y < 1.0 - offset) {
+        result = texture2D(u_textureA, v_texCoord + vec2(0.0, offset));
+      } else {
+        result = texture2D(u_textureB, v_texCoord + vec2(0.0, offset - 1.0));
+      }
+    }
+    // 8: slideDown 向下滑动
+    else if (u_transitionType == 8) {
+      float offset = p;
+      if (v_texCoord.y > offset) {
+        result = texture2D(u_textureA, v_texCoord - vec2(0.0, offset));
+      } else {
+        result = texture2D(u_textureB, v_texCoord + vec2(0.0, 1.0 - offset));
+      }
+    }
+    else {
+      result = mix(colorA, colorB, p);
+    }
+    
+    gl_FragColor = result;
+  }
+`
+
 export class WebGLRenderer {
-  private canvas: HTMLCanvasElement
+  private canvas: HTMLCanvasElement | OffscreenCanvas
   private gl: WebGLRenderingContext | null = null
   private program: WebGLProgram | null = null
   private texture: WebGLTexture | null = null
   private positionBuffer: WebGLBuffer | null = null
   private texCoordBuffer: WebGLBuffer | null = null
+  
+  // 转场相关
+  private transitionProgram: WebGLProgram | null = null
+  private textureB: WebGLTexture | null = null  // 第二个视频帧纹理
+  private transitionUniforms: Record<string, WebGLUniformLocation | null> = {}
   
   // Uniform 位置
   private uniforms: Record<string, WebGLUniformLocation | null> = {}
@@ -124,7 +233,7 @@ export class WebGLRenderer {
     blur: 0
   }
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas) {
     this.canvas = canvas
     this.init()
   }
@@ -166,6 +275,34 @@ export class WebGLRenderer {
 
     // 设置默认滤镜值
     this.updateFilterUniforms()
+    
+    // 初始化转场程序
+    this.initTransitionProgram()
+  }
+  
+  /**
+   * 初始化转场 shader 程序
+   */
+  private initTransitionProgram(): void {
+    if (!this.gl) return
+    
+    // 创建转场着色器程序
+    this.transitionProgram = this.createProgram(VERTEX_SHADER, TRANSITION_FRAGMENT_SHADER)
+    if (!this.transitionProgram) {
+      console.error('[WebGLRenderer] 转场程序创建失败')
+      return
+    }
+    
+    // 创建第二个纹理
+    this.textureB = this.gl.createTexture()
+    
+    // 获取转场 uniforms
+    this.transitionUniforms = {
+      textureA: this.gl.getUniformLocation(this.transitionProgram, 'u_textureA'),
+      textureB: this.gl.getUniformLocation(this.transitionProgram, 'u_textureB'),
+      progress: this.gl.getUniformLocation(this.transitionProgram, 'u_progress'),
+      transitionType: this.gl.getUniformLocation(this.transitionProgram, 'u_transitionType')
+    }
   }
 
   private createShader(type: number, source: string): WebGLShader | null {
@@ -481,6 +618,96 @@ export class WebGLRenderer {
     this.gl.clearColor(0, 0, 0, 1)
     this.gl.clear(this.gl.COLOR_BUFFER_BIT)
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
+  }
+
+
+
+  /**
+   * 转场类型映射表
+   */
+  private static readonly TRANSITION_TYPE_MAP: Record<string, number> = {
+    'fade': 0,
+    'dissolve': 1,
+    'slideLeft': 2,
+    'slideRight': 3,
+    'wipe': 4,
+    'zoom': 5,
+    'blur': 6,
+    'slideUp': 7,
+    'slideDown': 8
+  }
+
+  /**
+   * GPU 加速转场渲染
+   * @param sourceA 第一个视频帧
+   * @param sourceB 第二个视频帧
+   * @param progress 转场进度 (0-1)
+   * @param transitionType 转场类型
+   */
+  renderTransition(
+    sourceA: TexImageSource,
+    sourceB: TexImageSource,
+    progress: number,
+    transitionType: string
+  ): void {
+    if (!this.gl || !this.transitionProgram || !this.texture || !this.textureB) return
+    
+    const gl = this.gl
+    
+    // 使用转场着色器程序
+    gl.useProgram(this.transitionProgram)
+    
+    // 绑定顶点属性
+    const posLoc = gl.getAttribLocation(this.transitionProgram, 'a_position')
+    const texLoc = gl.getAttribLocation(this.transitionProgram, 'a_texCoord')
+    
+    if (this.positionBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer)
+      gl.enableVertexAttribArray(posLoc)
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    if (this.texCoordBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer)
+      gl.enableVertexAttribArray(texLoc)
+      gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    // 绑定纹理 A（第一个视频帧）
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.texture)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceA)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    
+    // 绑定纹理 B（第二个视频帧）
+    gl.activeTexture(gl.TEXTURE1)
+    gl.bindTexture(gl.TEXTURE_2D, this.textureB)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceB)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    
+    // 设置 uniforms
+    gl.uniform1i(this.transitionUniforms.textureA, 0)
+    gl.uniform1i(this.transitionUniforms.textureB, 1)
+    gl.uniform1f(this.transitionUniforms.progress, progress)
+    
+    // 获取转场类型索引
+    const typeIndex = WebGLRenderer.TRANSITION_TYPE_MAP[transitionType] ?? 0
+    gl.uniform1i(this.transitionUniforms.transitionType, typeIndex)
+    
+    // 渲染
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+    
+    // 恢复到主着色器程序
+    gl.useProgram(this.program)
   }
 
   /**
