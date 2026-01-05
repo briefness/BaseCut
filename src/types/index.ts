@@ -180,7 +180,7 @@ export interface Clip {
   effects: Effect[]
   
   // 音频属性（音频轨道专用）
-  volume?: number      // 音量 0-1，默认 0.4
+  volume?: number      // 音量 0-100，默认 40
   
   // 字幕（文字轨道专用）
   subtitle?: Subtitle

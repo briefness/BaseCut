@@ -173,7 +173,7 @@ const exportableAudioInfo = computed(() => {
         duration: clip.duration,
         inPoint: clip.inPoint,
         outPoint: clip.outPoint,
-        volume: clip.volume ?? 0.4  // 默认音量 0.4
+        volume: (clip.volume ?? 40) / 100  // 转换 0-100 为 0-1
       })
     }
   }

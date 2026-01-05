@@ -504,8 +504,8 @@ function renderCurrentFrame(renderTime: number) {
   if (audioClip && audioClip.materialId && audioElement) {
     const material = resourceStore.getMaterial(audioClip.materialId)
     if (material && material.type === 'audio') {
-      // 同步音量
-      audioElement.volume = timelineStore.volume
+      // 使用片段独立音量（0-100 转为 0-1），如果没有设置则使用默认 40
+      audioElement.volume = ((audioClip.volume ?? 40) / 100) * timelineStore.volume
       
       const clipTime = timelineStore.currentTime - audioClip.startTime + audioClip.inPoint
       

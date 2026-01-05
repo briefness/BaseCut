@@ -28,6 +28,9 @@ const selectedTrackType = computed(() => {
 // 是否是字幕片段
 const isTextClip = computed(() => selectedTrackType.value === 'text')
 
+// 是否是音频片段
+const isAudioClip = computed(() => selectedTrackType.value === 'audio')
+
 // 格式化时长
 function formatDuration(seconds?: number): string {
   if (!seconds) return '00:00.00'
@@ -132,6 +135,34 @@ function deleteClip() {
           <div class="property-row">
             <label>出点</label>
             <span class="property-value">{{ formatDuration(selectedClip.outPoint) }}</span>
+          </div>
+        </section>
+
+        <!-- 音频属性（音频轨道片段） -->
+        <section v-if="isAudioClip" class="property-section">
+          <h4>音频</h4>
+          
+          <div class="property-row audio-volume-row">
+            <label>音量</label>
+            <div class="audio-slider-container">
+              <input 
+                type="range"
+                class="audio-slider"
+                :value="selectedClip.volume ?? 40"
+                min="0"
+                max="100"
+                step="1"
+                @input="(e) => updateClipProperty('volume', Number((e.target as HTMLInputElement).value))"
+              />
+            </div>
+            <input 
+              type="number"
+              class="audio-value-input"
+              :value="selectedClip.volume ?? 40"
+              min="0"
+              max="100"
+              @change="(e) => updateClipProperty('volume', Math.min(100, Math.max(0, Number((e.target as HTMLInputElement).value))))"
+            />
           </div>
         </section>
 
@@ -373,5 +404,83 @@ textarea.input {
   flex: 1;
   padding: 6px 10px;
   font-size: 12px;
+}
+
+/* 音量控制 - 剪映风格 */
+.audio-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.audio-volume-row label {
+  flex-shrink: 0;
+  width: 40px;
+}
+
+.audio-slider-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.audio-slider {
+  width: 100%;
+  height: 2px;
+  appearance: none;
+  background: var(--border-secondary);
+  border-radius: 1px;
+  cursor: pointer;
+  outline: none;
+}
+
+.audio-slider::-webkit-slider-runnable-track {
+  height: 2px;
+  background: var(--border-secondary);
+  border-radius: 1px;
+}
+
+.audio-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--text-primary);
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: -5px;
+  transition: transform 0.15s ease;
+}
+
+.audio-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.audio-slider::-webkit-slider-thumb:active {
+  transform: scale(1.1);
+}
+
+.audio-value-input {
+  width: 48px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--border-secondary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.audio-value-input:focus {
+  border-color: var(--primary);
+}
+
+.audio-value-input::-webkit-inner-spin-button,
+.audio-value-input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 </style>
