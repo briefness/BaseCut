@@ -98,6 +98,12 @@ const exportableClips = computed(() => {
       const material = resourceStore.getMaterial(clip.materialId)
       if (!material || material.type !== 'video') continue
       
+      // 需要有本地文件才能导出
+      if (!material.file) {
+        console.warn('[ExportDialog] 跳过无本地文件的片段:', clip.id)
+        continue
+      }
+      
       clips.push({
         file: material.file,
         startTime: clip.startTime,
@@ -109,6 +115,28 @@ const exportableClips = computed(() => {
   }
   
   return clips.sort((a, b) => a.startTime - b.startTime)
+})
+
+// 获取可导出的字幕（用于 WebCodecs 导出）
+const exportableSubtitles = computed(() => {
+  const subtitles: { subtitle: import('@/types').Subtitle; startTime: number; duration: number }[] = []
+  
+  // 遍历所有 text 类型轨道
+  for (const track of timelineStore.tracks) {
+    if (track.type !== 'text') continue
+    
+    for (const clip of track.clips) {
+      if (!clip.subtitle) continue
+      
+      subtitles.push({
+        subtitle: clip.subtitle,
+        startTime: clip.startTime,
+        duration: clip.duration
+      })
+    }
+  }
+  
+  return subtitles.sort((a, b) => a.startTime - b.startTime)
 })
 
 // 检查是否可以导出
@@ -170,8 +198,10 @@ async function exportWithWebCodecs(): Promise<Blob> {
     exportProgress.value = Math.round(progress * 100)
   })
   
+  // 导出视频（包含字幕）
   return webCodecsExporter.export({
     clips: webCodecsClips,
+    subtitleClips: exportableSubtitles.value,
     width: exportResolution.value.width,
     height: exportResolution.value.height,
     frameRate: projectStore.frameRate,

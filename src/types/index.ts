@@ -179,6 +179,9 @@ export interface Clip {
   outPoint: number     // 素材出点（秒）
   effects: Effect[]
   
+  // 音频属性（音频轨道专用）
+  volume?: number      // 音量 0-1，默认 0.4
+  
   // 字幕（文字轨道专用）
   subtitle?: Subtitle
   
