@@ -47,23 +47,17 @@ function openExportDialog() {
       </div>
     </header>
 
-    <!-- 主内容区 -->
-    <div class="main-content">
+    <!-- 上方内容区（三列布局） -->
+    <div class="upper-content">
       <!-- 左侧面板 - 素材上传 -->
       <aside class="sidebar left-sidebar">
         <MaterialUpload />
       </aside>
 
-      <!-- 中间区域 -->
+      <!-- 中间区域 - 预览 -->
       <div class="center-area">
-        <!-- 预览区 -->
         <section class="preview-section">
           <Player />
-        </section>
-
-        <!-- 时间线区 -->
-        <section class="timeline-section">
-          <Timeline />
         </section>
       </div>
 
@@ -72,6 +66,11 @@ function openExportDialog() {
         <PropertyPanel />
       </aside>
     </div>
+
+    <!-- 下方时间轴区（撑满整个宽度） -->
+    <section class="timeline-section">
+      <Timeline />
+    </section>
     
     <!-- 导出对话框 -->
     <ExportDialog v-model:visible="showExportDialog" />
@@ -146,11 +145,12 @@ function openExportDialog() {
   box-shadow: 0 0 0 2px var(--primary-light);
 }
 
-/* 主内容区 */
-.main-content {
+/* 上方内容区（三列布局） */
+.upper-content {
   flex: 1;
   display: flex;
   overflow: hidden;
+  min-height: 0; /* 防止 flex 溢出 */
 }
 
 /* 侧边栏 */
@@ -190,10 +190,12 @@ function openExportDialog() {
   overflow: hidden;
 }
 
+/* 时间轴区域（撑满底部宽度） */
 .timeline-section {
   height: var(--timeline-height);
   flex-shrink: 0;
   border-top: 1px solid var(--border-secondary);
   background: var(--bg-secondary);
+  width: 100%; /* 确保撑满 */
 }
 </style>
