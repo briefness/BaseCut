@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { App, Image as LeaferImage } from 'leafer-ui'
+import '@leafer-in/editor'
 import { useTimelineStore } from '@/stores/timeline'
 import { useProjectStore } from '@/stores/project'
 import { useResourceStore } from '@/stores/resource'
@@ -28,6 +30,8 @@ let needsInitialSeek = false  // 是否需要初始 seek
 // 转场渲染相关
 let transitionVideoB: HTMLVideoElement | null = null  // 转场回退用视频元素
 const frameImageCache = new Map<string, HTMLImageElement>()  // 转场帧图片缓存
+// 移除重复定义
+// 移除重复定义
 
 // 显示尺寸（根据容器自适应）
 const displaySize = ref({ width: 640, height: 360 })
@@ -411,6 +415,18 @@ function renderThumbnailFrame(frameUrl: string, cacheKey: string) {
     }
   }
 
+  // 渲染贴纸层
+  function renderStickers(_renderTime: number) {
+     // 预览模式下，贴纸完全由 LeaferJS 层负责渲染 (所见即所得)
+     // WebGL 仅用于 Export
+  }
+
+  // 统一后期渲染 (贴纸 + 字幕)
+  function renderPostEffects(time: number) {
+     renderStickers(time)
+     renderSubtitles(time)
+  }
+
 function renderCurrentFrame(renderTime: number) {
     // 检查预加载
     if (timelineStore.isPlaying) {
@@ -471,8 +487,9 @@ function renderCurrentFrame(renderTime: number) {
       if (frameA && frameB && renderer) {
         renderer.renderTransition(frameA, frameB, progress, transition.type)
         
+        
         const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
-        renderSubtitles(subtitleTime)
+        renderPostEffects(subtitleTime)
         return
       }
       
@@ -497,8 +514,9 @@ function renderCurrentFrame(renderTime: number) {
         }
         
         renderer.renderTransition(videoElement, transitionVideoB, progress, transition.type)
+        
         const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
-        renderSubtitles(subtitleTime)
+        renderPostEffects(subtitleTime)
         return
       }
     }
@@ -609,6 +627,10 @@ function renderCurrentFrame(renderTime: number) {
       // 即使 readyState 还没变，也不应该渲染 videoElement（它可能还持有上一段的画面）
       if (!isNewClip && videoElement.readyState >= 2) {
         renderer.renderFrame(videoElement)
+        
+        const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+        renderPostEffects(subtitleTime)
+        
       } else if (transitionVideoB && transitionVideoB.readyState >= 2) {
         // [修复] 平滑切换：如果 Main Player 尚未准备好（例如转场刚结束切换到 B），
         // 尝试使用预加载了 B 的 Aux Player 进行渲染，避免黑屏
@@ -631,6 +653,10 @@ function renderCurrentFrame(renderTime: number) {
              
              // console.log('[Player] Using Aux Player for smooth handoff')
              renderer.renderFrame(transitionVideoB)
+             
+             const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
+             renderPostEffects(subtitleTime)
+             return
         }
       }
     }
@@ -797,6 +823,275 @@ function formatTime(seconds: number): string {
   const ms = Math.floor((seconds % 1) * 100)
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms.toString().padStart(2, '0')}`
 }
+
+// ==================== 贴纸交互 ====================
+// ==================== Leafer 贴纸交互 ====================
+const leaferContainer = ref<HTMLElement | null>(null)
+let leaferApp: any = null
+const leaferObjects = new Map<string, LeaferImage>()
+const isInteracting = ref(false) // 交互锁
+
+onMounted(() => {
+  initLeafer()
+})
+
+onUnmounted(() => {
+  if (leaferApp) {
+    leaferApp.destroy()
+    leaferApp = null
+  }
+})
+
+function initLeafer() {
+  if (!leaferContainer.value) return
+
+  try {
+    leaferApp = new App({
+      view: leaferContainer.value,
+      editor: { editSize: 'scale' }, // 底层核心：让编辑器修改 scale 而不是 width/height
+      fill: 'rgba(0,0,0,0)',
+      tree: {}
+    })
+    
+    // 监听变换 (Editor 触发的事件可能不一致，保险起见监听对象事件)
+    
+    // [临时禁用] 这个全局 pointer.up 可能会干扰正常的事件流程
+    // leaferApp.tree.on('pointer.up', () => {
+    //     if (isInteracting.value) {
+    //         isInteracting.value = false
+    //         // 触发一次全量同步
+    //         leaferObjects.forEach(obj => syncLeaferToStore(obj))
+    //     }
+    // })
+    
+    // 点击选中
+    leaferApp.tree.on('tap', (e: any) => {
+         // tap event target might be inner content?
+         // search up or check target
+         const target = e.target
+         if (target && target.clipId) {
+             timelineStore.selectClip(target.clipId)
+         }
+    })
+  } catch (e) {
+    console.error('Leafer init failed:', e)
+  }
+}
+
+// 监听 Active Clips 同步
+watch(() => timelineStore.getActiveClips(timelineStore.currentTime), (clips) => {
+    syncStoreToLeafer(clips)
+}, { deep: true })
+
+// 监听选中状态，同步 Leafer 选中
+watch(() => timelineStore.selectedClipId, (id) => {
+    if (!leaferApp) return
+    if (id) {
+       const obj = leaferObjects.get(id)
+       if (obj) {
+           leaferApp.editor.select(obj)
+       }
+    } else {
+       leaferApp.editor.cancel()
+    }
+})
+
+function syncStoreToLeafer(clips: import('@/types').Clip[]) {
+    if (!leaferApp) return
+    
+    // 筛选贴纸类型的片段
+    const stickers = clips.filter(c => {
+         const m = resourceStore.getMaterial(c.materialId || '')
+         return m?.type === 'sticker'
+    })
+    
+    const activeIds = new Set(stickers.map(c => c.id))
+    
+    // ============ 第一步：清理不再活跃的贴纸 ============
+    for (const [id, obj] of leaferObjects) {
+        if (!activeIds.has(id)) {
+            obj.remove()
+            leaferObjects.delete(id)
+        }
+    }
+    
+    // ============ 第二步：创建或更新贴纸 ============
+    stickers.forEach(clip => {
+        const existingObj = leaferObjects.get(clip.id)
+        const mat = resourceStore.getMaterial(clip.materialId || '')
+        if (!mat) return
+        
+        // 获取画布尺寸用于坐标转换
+        const viewW = leaferContainer.value?.clientWidth || leaferApp!.width || 640
+        const viewH = leaferContainer.value?.clientHeight || leaferApp!.height || 360
+        
+        // 从 Store 读取变换数据（这是唯一的数据源）
+        const transform = clip.transform || { x: 50, y: 50, scale: 1, rotation: 0, opacity: 1 }
+        
+        // 坐标转换：百分比 -> 像素
+        const pixelX = (transform.x / 100) * viewW
+        const pixelY = (transform.y / 100) * viewH
+        
+        // 素材尺寸（作为 scale 的基准）
+        const baseW = mat.width || 100
+        const baseH = mat.height || 100
+        
+        if (!existingObj) {
+            // ============ 创建新贴纸 ============
+            // 优先使用 scaleX/scaleY，否则回退到 scale
+            const effectiveScaleX = transform.scaleX ?? transform.scale
+            const effectiveScaleY = transform.scaleY ?? transform.scale
+            
+            console.log('[Sticker CREATE]', {
+                clipId: clip.id,
+                effectiveScaleX, effectiveScaleY,
+                baseW, baseH
+            })
+            
+            const newObj = new LeaferImage({
+                id: clip.id,
+                url: mat.blobUrl || mat.thumbnail,
+                width: baseW,
+                height: baseH,
+                x: pixelX,
+                y: pixelY,
+                scaleX: effectiveScaleX,
+                scaleY: effectiveScaleY,
+                rotation: transform.rotation,
+                opacity: transform.opacity,
+                around: 'center',
+                editable: { }, // 移除 aspectRatio: true，允许非等比缩放
+                zIndex: 10
+            })
+            
+            // [调试] 验证创建后的实际 scale 值
+            console.log('[Sticker CREATED] actual values:', {
+                clipId: clip.id,
+                'newObj.scaleX': newObj.scaleX,
+                'newObj.scaleY': newObj.scaleY,
+                'newObj.width': newObj.width,
+                'newObj.height': newObj.height,
+                'transform.scale input': transform.scale
+            })
+            
+            // [关键修复] 捕获图片加载后 Leafer 可能自动调整尺寸的情况
+            const targetScaleX = effectiveScaleX
+            const targetScaleY = effectiveScaleY
+            const targetWidth = baseW
+            const targetHeight = baseH
+            newObj.on('load', () => {
+                console.log('[Sticker LOAD] image loaded:', {
+                    'before width': newObj.width,
+                    'before height': newObj.height,
+                    'before scaleX': newObj.scaleX,
+                    'before scaleY': newObj.scaleY,
+                    targetWidth, targetHeight, targetScaleX, targetScaleY
+                })
+                // 强制恢复到保存的尺寸和 scale 值
+                newObj.width = targetWidth
+                newObj.height = targetHeight
+                newObj.scaleX = targetScaleX
+                newObj.scaleY = targetScaleY
+                console.log('[Sticker LOAD] after restore:', {
+                    'width': newObj.width,
+                    'height': newObj.height,
+                    'scaleX': newObj.scaleX,
+                    'scaleY': newObj.scaleY
+                })
+            })
+            
+            // 绑定交互事件
+            newObj.on('drag.end', () => syncLeaferToStore(newObj))
+            newObj.on('rotate.end', () => syncLeaferToStore(newObj))
+            newObj.on('scale.end', () => syncLeaferToStore(newObj))
+            
+            // 交互锁：防止交互过程中被外部同步覆盖
+            newObj.on('drag.start', () => { isInteracting.value = true })
+            newObj.on('rotate.start', () => { isInteracting.value = true })
+            newObj.on('scale.start', () => { isInteracting.value = true })
+            newObj.on('drag.end', () => { isInteracting.value = false })
+            newObj.on('rotate.end', () => { isInteracting.value = false })
+            newObj.on('scale.end', () => { isInteracting.value = false })
+            
+            leaferApp!.tree.add(newObj)
+            leaferObjects.set(clip.id, newObj)
+            
+            // 自动选中
+            if (timelineStore.selectedClipId === clip.id) {
+                leaferApp!.editor.select(newObj)
+            }
+        } else if (!isInteracting.value) {
+            // ============ 更新已存在的贴纸（非交互状态下）============
+            // 优先使用 scaleX/scaleY，否则回退到 scale
+            const effectiveScaleX = transform.scaleX ?? transform.scale
+            const effectiveScaleY = transform.scaleY ?? transform.scale
+            
+            console.log('[Sticker UPDATE] before:', {
+                clipId: clip.id,
+                effectiveScaleX, effectiveScaleY,
+                'obj.scaleX': existingObj.scaleX,
+                'obj.scaleY': existingObj.scaleY,
+                'obj.width': existingObj.width,
+                'obj.height': existingObj.height
+            })
+            
+            // 直接从 Store 同步所有属性
+            existingObj.x = pixelX
+            existingObj.y = pixelY
+            existingObj.scaleX = effectiveScaleX
+            existingObj.scaleY = effectiveScaleY
+            existingObj.rotation = transform.rotation
+            existingObj.opacity = transform.opacity
+            
+            console.log('[Sticker UPDATE] after:', {
+                'obj.scaleX': existingObj.scaleX,
+                'obj.scaleY': existingObj.scaleY,
+                'obj.width': existingObj.width,
+                'obj.height': existingObj.height
+            })
+        }
+    })
+}
+
+/**
+ * 将 Leafer 对象的状态同步回 Store
+ * 这是交互结束后的唯一回写入口
+ */
+function syncLeaferToStore(obj: any) {
+    if (!leaferApp || !obj?.id) return
+    
+    // 获取画布尺寸用于坐标归一化
+    const viewW = leaferContainer.value?.clientWidth || leaferApp.width || 640
+    const viewH = leaferContainer.value?.clientHeight || leaferApp.height || 360
+    
+    // 坐标归一化：像素 -> 百分比
+    const percentX = (obj.x / viewW) * 100
+    const percentY = (obj.y / viewH) * 100
+    
+    // [关键修复] 分别存储 scaleX 和 scaleY，支持非等比缩放
+    const scaleX = obj.scaleX
+    const scaleY = obj.scaleY
+    
+    console.log('[Sticker SYNC TO STORE]', {
+        clipId: obj.id,
+        scaleX, scaleY,
+        percentX, percentY
+    })
+    
+    // 更新 Store（单一数据源）
+    timelineStore.updateClip(obj.id, {
+        transform: {
+            x: percentX,
+            y: percentY,
+            scale: scaleX, // 保持向后兼容
+            scaleX: scaleX,
+            scaleY: scaleY,
+            rotation: obj.rotation || 0,
+            opacity: obj.opacity ?? 1
+        }
+    } as any)
+}
+
 </script>
 
 <template>
@@ -816,13 +1111,14 @@ function formatTime(seconds: number): string {
         class="video-canvas"
       />
       
-      <!-- 字幕层 Canvas -->
       <canvas 
         ref="subtitleCanvasRef" 
         :width="displaySize.width"
         :height="displaySize.height"
         class="subtitle-canvas"
       />
+          <!-- Leafer 交互层 -->
+          <div class="leafer-layer" ref="leaferContainer"></div>
       
       <!-- 空状态 -->
       <div v-if="timelineStore.duration === 0" class="empty-overlay">
@@ -1109,9 +1405,25 @@ function formatTime(seconds: number): string {
   width: 80px;
   height: 4px;
   -webkit-appearance: none;
+  appearance: none;
   background: var(--bg-secondary);
   border-radius: 2px;
   cursor: pointer;
+}
+
+/* Leafer 样式 */
+.leafer-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 100;
+  z-index: 100;
+  /* pointer-events: none;  移除此行，确保 Leafer 接收事件 */
+  /* Leafer canvas handles events. But if transparency? */
+  /* Actually canvas catches all events. We might block clicking on video underneath? */
+  /* It's fine for now. */
 }
 
 .volume-control input[type="range"]::-webkit-slider-thumb {

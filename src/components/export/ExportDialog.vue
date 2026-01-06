@@ -312,16 +312,52 @@ async function exportWithWebCodecs(): Promise<Blob> {
   
   console.log(`[ExportDialog] 导出转场数: ${exportTransitions.length}`, exportTransitions)
   
-  // 导出视频（包含字幕、音频和转场）
+  console.log(`[ExportDialog] 导出转场数: ${exportTransitions.length}`, exportTransitions)
+  
+  // 准备贴纸片段 (加载图片)
+  const stickerClips: import('@/engine/WebCodecsExporter').WebCodecsStickerClip[] = []
+  
+  for (const track of timelineStore.tracks) {
+      for (const clip of track.clips) {
+        const material = resourceStore.getMaterial(clip.materialId ?? '')
+        if (material?.type === 'sticker') {
+           const url = material.blobUrl || material.thumbnail
+           if (url) {
+             try {
+                const img = new Image()
+                img.src = url // crossOrigin? usually blobUrl is local.
+                // wait load
+                await new Promise((resolve, reject) => {
+                    if (img.complete) return resolve(null)
+                    img.onload = () => resolve(null)
+                    img.onerror = reject
+                })
+                
+                stickerClips.push({
+                   image: img,
+                   transform: clip.transform || { x: 50, y: 50, scale: 1, rotation: 0, opacity: 1 },
+                   startTime: clip.startTime,
+                   duration: clip.duration
+                })
+             } catch(e) {
+                console.warn('[ExportDialog] Failed to load sticker', clip.id, e)
+             }
+           }
+        }
+      }
+  }
+
+  // 导出视频（包含字幕、音频、转场和贴纸）
   return webCodecsExporter.export({
     clips: webCodecsClips,
     subtitleClips: exportableSubtitles.value,
+    stickerClips: stickerClips.length > 0 ? stickerClips : undefined,
     audioClips: audioClips.length > 0 ? audioClips : undefined,
     transitions: exportTransitions.length > 0 ? exportTransitions : undefined,
     width: exportResolution.value.width,
     height: exportResolution.value.height,
     frameRate: projectStore.frameRate,
-    videoBitrate: useCustomBitrate.value ? videoBitrateBps.value : undefined
+    videoBitrate: useCustomBitrate.value ? videoBitrateBps.value : 5000000
   })
 }
 

@@ -13,7 +13,7 @@ import {
   QUALITY_MEDIUM,
   QUALITY_LOW
 } from 'mediabunny'
-import type { Subtitle } from '@/types'
+import type { Subtitle, Transform } from '@/types'
 import { subtitleRenderer, type RenderContext } from '@/utils/SubtitleRenderer'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 
@@ -29,6 +29,14 @@ export interface WebCodecsExportClip {
 // 字幕片段信息
 export interface WebCodecsSubtitleClip {
   subtitle: Subtitle              // 字幕配置（包含样式和位置）
+  startTime: number               // 片段在时间线上的开始时间（秒）
+  duration: number                // 片段时长（秒）
+}
+
+// 贴纸片段信息
+export interface WebCodecsStickerClip {
+  image: HTMLImageElement | ImageBitmap
+  transform: Transform
   startTime: number               // 片段在时间线上的开始时间（秒）
   duration: number                // 片段时长（秒）
 }
@@ -51,17 +59,18 @@ export interface WebCodecsTransition {
   duration: number                // 转场时长（秒）
 }
 
-// 导出选项
+// 导出配置
 export interface WebCodecsExportOptions {
-  clips: WebCodecsExportClip[]           // 视频片段列表
-  subtitleClips?: WebCodecsSubtitleClip[] // 字幕片段列表
-  audioClips?: WebCodecsAudioClip[]      // 音频片段列表
-  transitions?: WebCodecsTransition[]     // 转场列表
-  width: number                   // 输出宽度
-  height: number                  // 输出高度
-  frameRate: number               // 帧率
-  videoBitrate?: number           // 视频码率 (bps)，默认 5Mbps
-  quality?: 'low' | 'medium' | 'high'  // 质量预设
+  clips: WebCodecsExportClip[]
+  subtitleClips?: WebCodecsSubtitleClip[]
+  audioClips?: WebCodecsAudioClip[]
+  stickerClips?: WebCodecsStickerClip[]
+  transitions?: WebCodecsTransition[]
+  width: number
+  height: number
+  frameRate: number
+  videoBitrate: number
+  quality?: 'high' | 'medium' | 'low'
 }
 
 export class WebCodecsExporter {
@@ -141,6 +150,7 @@ export class WebCodecsExporter {
       clips, 
       subtitleClips = [], 
       audioClips = [],
+      stickerClips = [],
       transitions = [],
       width, 
       height, 
@@ -341,6 +351,17 @@ export class WebCodecsExporter {
            // 黑屏 (WebGL渲染器负责清空)
            this.renderer.clear()
         }
+      }
+      
+      // 2.a 渲染贴纸 (Overlay)
+      if (this.renderer && stickerClips.length > 0) {
+         const activeStickers = stickerClips.filter(s => 
+           timelineTime >= s.startTime && timelineTime < s.startTime + s.duration
+         )
+         // 按 ZIndex (这里假设 array order 就是 Z order)
+         for (const sticker of activeStickers) {
+            this.renderer.renderOverlay(sticker.image, sticker.transform)
+         }
       }
       
       // 3. 将 WebGL 画布内容绘制到合成画布

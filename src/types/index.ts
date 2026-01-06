@@ -1,5 +1,5 @@
 // ==================== 素材类型 ====================
-export type MaterialType = 'video' | 'audio' | 'image'
+export type MaterialType = 'video' | 'audio' | 'image' | 'sticker'
 
 // 素材处理状态
 export type MaterialProcessingStatus = 'local' | 'uploading' | 'processing' | 'ready' | 'error'
@@ -61,7 +61,7 @@ export interface Material {
 }
 
 // ==================== 轨道类型 ====================
-export type TrackType = 'video' | 'audio' | 'text'
+export type TrackType = 'video' | 'audio' | 'text' | 'sticker'
 
 export interface Track {
   id: string
@@ -167,6 +167,27 @@ export const DEFAULT_SUBTITLE_POSITION: SubtitlePosition = {
   y: 85
 }
 
+// ==================== 变换属性 ====================
+export interface Transform {
+  x: number           // 屏幕坐标 x% (0-100)
+  y: number           // 屏幕坐标 y% (0-100)
+  scale: number       // 缩放比例 (1 = 100%) - 兼容旧数据，等比缩放时使用
+  scaleX?: number     // X轴缩放比例 - 非等比缩放时使用
+  scaleY?: number     // Y轴缩放比例 - 非等比缩放时使用
+  rotation: number    // 旋转角度 (度)
+  opacity: number     // 不透明度 (0-1)
+}
+
+export const DEFAULT_TRANSFORM: Transform = {
+  x: 50,
+  y: 50,
+  scale: 1,
+  scaleX: 1,
+  scaleY: 1,
+  rotation: 0,
+  opacity: 1
+}
+
 // ==================== 片段类型 ====================
 
 export interface Clip {
@@ -178,6 +199,9 @@ export interface Clip {
   inPoint: number      // 素材入点（秒）
   outPoint: number     // 素材出点（秒）
   effects: Effect[]
+  
+  // [新增] 变换属性 (用于画中画、贴纸等)
+  transform?: Transform
   
   // 音频属性（音频轨道专用）
   volume?: number      // 音量 0-100，默认 40

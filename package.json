@@ -12,8 +12,10 @@
   "dependencies": {
     "@ffmpeg/ffmpeg": "^0.12.10",
     "@ffmpeg/util": "^0.12.1",
+    "@leafer-in/editor": "^1.12.2",
     "hls.js": "^1.6.15",
     "idb": "^8.0.1",
+    "leafer-ui": "^1.12.2",
     "mediabunny": "^1.27.2",
     "pinia": "^2.2.8",
     "vue": "^3.5.13"

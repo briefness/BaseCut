@@ -27,6 +27,10 @@ export const useResourceStore = defineStore('resource', () => {
     materials.value.filter(m => m.type === 'image')
   )
 
+  const stickerMaterials = computed(() => 
+    materials.value.filter(m => m.type === 'sticker')
+  )
+
   // ==================== 方法 ====================
 
   /**
@@ -72,11 +76,11 @@ export const useResourceStore = defineStore('resource', () => {
   /**
    * 添加素材
    */
-  async function addMaterial(file: File): Promise<Material> {
+  async function addMaterial(file: File, forceType?: MaterialType): Promise<Material> {
     uploadProgress.value = 0
     
     const id = crypto.randomUUID()
-    const type = getFileType(file)
+    const type = forceType || getFileType(file)
     const blobUrl = URL.createObjectURL(file)
 
     // 基础素材信息
@@ -99,7 +103,7 @@ export const useResourceStore = defineStore('resource', () => {
       } catch (error) {
         console.warn('获取媒体信息失败:', error)
       }
-    } else if (type === 'image') {
+    } else if (type === 'image' || type === 'sticker') {
       try {
         const info = await getImageInfo(blobUrl)
         material.width = info.width
@@ -160,39 +164,42 @@ export const useResourceStore = defineStore('resource', () => {
   /**
    * 后台异步转换视频为 HLS
    */
-  async function convertToHLSAsync(material: Material, file: File): Promise<void> {
-    try {
-      console.log(`[ResourceStore] 开始转换 ${material.name} 为 HLS...`)
-      
-      // 设置进度回调
-      ffmpegCore.onProgress((progress) => {
-        console.log(`[ResourceStore] HLS 转换进度: ${Math.round(progress * 100)}%`)
-      })
-
-      const result = await ffmpegCore.convertToHLS(file, {
-        segmentDuration: 4
-      })
-
-      // 更新素材的 HLS URL
-      material.hlsUrl = result.playlistUrl
-      material.isConverting = false
-
-      console.log(`[ResourceStore] ${material.name} HLS 转换完成`)
-    } catch (error) {
-      console.error(`[ResourceStore] HLS 转换失败:`, error)
-      material.isConverting = false
-      // 失败时继续使用原始 blobUrl
-    }
-  }
+  /**
+   * 后台异步转换视频为 HLS
+   */
+  // async function convertToHLSAsync(material: Material, file: File): Promise<void> {
+  //   try {
+  //     console.log(`[ResourceStore] 开始转换 ${material.name} 为 HLS...`)
+  //     
+  //     // 设置进度回调
+  //     ffmpegCore.onProgress((progress) => {
+  //       console.log(`[ResourceStore] HLS 转换进度: ${Math.round(progress * 100)}%`)
+  //     })
+  //
+  //     const result = await ffmpegCore.convertToHLS(file, {
+  //       segmentDuration: 4
+  //     })
+  //
+  //     // 更新素材的 HLS URL
+  //     material.hlsUrl = result.playlistUrl
+  //     material.isConverting = false
+  //
+  //     console.log(`[ResourceStore] ${material.name} HLS 转换完成`)
+  //   } catch (error) {
+  //     console.error(`[ResourceStore] HLS 转换失败:`, error)
+  //     material.isConverting = false
+  //     // 失败时继续使用原始 blobUrl
+  //   }
+  // }
 
   /**
    * 批量添加素材
    */
-  async function addMaterials(files: File[]): Promise<Material[]> {
+  async function addMaterials(files: File[], forceType?: MaterialType): Promise<Material[]> {
     const results: Material[] = []
     
     for (let i = 0; i < files.length; i++) {
-      const material = await addMaterial(files[i])
+      const material = await addMaterial(files[i], forceType)
       results.push(material)
     }
 
@@ -209,7 +216,7 @@ export const useResourceStore = defineStore('resource', () => {
     const material = materials.value[index]
 
     // 释放 Blob URL
-    URL.revokeObjectURL(material.blobUrl)
+    if (material.blobUrl) URL.revokeObjectURL(material.blobUrl)
     if (material.thumbnail) {
       URL.revokeObjectURL(material.thumbnail)
     }
@@ -227,7 +234,7 @@ export const useResourceStore = defineStore('resource', () => {
   async function clearAll(): Promise<void> {
     // 释放所有 Blob URL
     for (const material of materials.value) {
-      URL.revokeObjectURL(material.blobUrl)
+      if (material.blobUrl) URL.revokeObjectURL(material.blobUrl)
       if (material.thumbnail) {
         URL.revokeObjectURL(material.thumbnail)
       }
@@ -298,6 +305,7 @@ export const useResourceStore = defineStore('resource', () => {
     videoMaterials,
     audioMaterials,
     imageMaterials,
+    stickerMaterials,
     // 方法
     init,
     addMaterial,

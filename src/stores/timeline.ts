@@ -63,14 +63,14 @@ export const useTimelineStore = defineStore('timeline', () => {
     const track: Track = {
       id: crypto.randomUUID(),
       type,
-      name: name ?? `${type === 'video' ? '视频' : type === 'audio' ? '音频' : '文字'}轨道 ${tracks.value.filter(t => t.type === type).length + 1}`,
+      name: name ?? `${type === 'video' ? '视频' : type === 'audio' ? '音频' : type === 'sticker' ? '贴纸' : '文字'}轨道 ${tracks.value.filter(t => t.type === type).length + 1}`,
       clips: [],
       muted: false,
       locked: false
     }
     
     // 按类型排序插入
-    const typeOrder = { video: 0, text: 1, audio: 2 }
+    const typeOrder: Record<string, number> = { video: 0, sticker: 1, text: 2, audio: 3 }
     const insertIndex = tracks.value.findIndex(t => typeOrder[t.type] > typeOrder[type])
     
     if (insertIndex === -1) {
@@ -219,7 +219,23 @@ export const useTimelineStore = defineStore('timeline', () => {
     for (const track of tracks.value) {
       const clip = track.clips.find(c => c.id === clipId)
       if (clip) {
+        // [调试日志] 验证 transform 更新
+        if (updates.transform) {
+          console.log('[Timeline updateClip]', {
+            clipId,
+            'updates.transform': updates.transform,
+            'clip.transform before': clip.transform
+          })
+        }
+        
         Object.assign(clip, updates)
+        
+        if (updates.transform) {
+          console.log('[Timeline updateClip] after:', {
+            'clip.transform after': clip.transform
+          })
+        }
+        
         updateDuration()
         return
       }

@@ -2,18 +2,19 @@
 import { ref, computed } from 'vue'
 import { useResourceStore } from '@/stores/resource'
 import { useTimelineStore } from '@/stores/timeline'
-import type { Material } from '@/types'
+import type { Material, TrackType } from '@/types'
 
 const resourceStore = useResourceStore()
 const timelineStore = useTimelineStore()
 
 const isDragging = ref(false)
-const activeTab = ref<'video' | 'audio' | 'image'>('video')
+const activeTab = ref<'video' | 'audio' | 'image' | 'sticker'>('video')
 
 const filteredMaterials = computed(() => {
   if (activeTab.value === 'video') return resourceStore.videoMaterials
   if (activeTab.value === 'audio') return resourceStore.audioMaterials
-  return resourceStore.imageMaterials
+  if (activeTab.value === 'image') return resourceStore.imageMaterials
+  return resourceStore.stickerMaterials
 })
 
 // 文件拖放处理
@@ -40,8 +41,44 @@ async function handleDrop(e: DragEvent) {
   )
 
   if (validFiles.length) {
-    await resourceStore.addMaterials(validFiles)
+    if (activeTab.value === 'sticker') {
+       // 如果在贴纸Tab下拖入，强制为贴纸
+       for (const file of validFiles) {
+          if (file.type.startsWith('image/')) {
+             await resourceStore.addMaterial(file, 'sticker')
+          } else {
+             await resourceStore.addMaterial(file)
+          }
+       }
+    } else {
+       await resourceStore.addMaterials(validFiles)
+    }
   }
+}
+
+// 添加演示贴纸
+async function addMockSticker() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 256
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return
+  
+  // 绘制 emoji
+  ctx.clearRect(0, 0, 256, 256)
+  ctx.font = '150px serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  const emojis = ['😎', '🔥', '🚀', '🎉', '🐶', '🐱']
+  const emoji = emojis[Math.floor(Math.random() * emojis.length)]
+  ctx.fillText(emoji, 128, 140) // 略微调整垂直位置
+  
+  canvas.toBlob(async (blob) => {
+    if (blob) {
+       const file = new File([blob], `Sticker_${emoji}.png`, { type: 'image/png' })
+       await resourceStore.addMaterial(file, 'sticker')
+    }
+  })
 }
 
 // 点击上传
@@ -56,7 +93,11 @@ async function handleFileSelect(e: Event) {
   const files = target.files
   if (!files?.length) return
 
-  await resourceStore.addMaterials(Array.from(files))
+  if (activeTab.value === 'sticker') {
+     await resourceStore.addMaterials(Array.from(files), 'sticker')
+  } else {
+     await resourceStore.addMaterials(Array.from(files))
+  }
   target.value = ''
 }
 
@@ -65,7 +106,7 @@ function addToTimeline(material: Material) {
   // 找到或创建对应类型的轨道
   let track = timelineStore.tracks.find(t => t.type === material.type)
   if (!track) {
-    track = timelineStore.addTrack(material.type as 'video' | 'audio')
+    track = timelineStore.addTrack(material.type as TrackType)
   }
 
   // 计算新片段的开始时间（放在轨道末尾）
@@ -79,7 +120,17 @@ function addToTimeline(material: Material) {
     duration: material.duration ?? 5,
     inPoint: 0,
     outPoint: material.duration ?? 5,
-    effects: []
+    effects: [],
+    // 为贴纸设置初始变换
+    ...(material.type === 'sticker' && {
+      transform: {
+        x: 50,
+        y: 50,
+        scale: material.width ? Math.min(1, 360 / material.width) : 0.5,
+        rotation: 0,
+        opacity: 1
+      }
+    })
   })
 }
 
@@ -118,12 +169,13 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
         v-for="tab in [
           { key: 'video', label: '视频', icon: '🎬' },
           { key: 'audio', label: '音频', icon: '🎵' },
-          { key: 'image', label: '图片', icon: '🖼️' }
+          { key: 'image', label: '图片', icon: '🖼️' },
+          { key: 'sticker', label: '贴纸', icon: '✨' }
         ]" 
         :key="tab.key"
         class="tab"
         :class="{ active: activeTab === tab.key }"
-        @click="activeTab = tab.key as 'video' | 'audio' | 'image'"
+        @click="activeTab = tab.key as any"
       >
         <span>{{ tab.icon }}</span>
         <span>{{ tab.label }}</span>
@@ -171,7 +223,7 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
             :alt="material.name"
           />
           <div v-else class="thumb-placeholder">
-            {{ material.type === 'video' ? '🎬' : material.type === 'audio' ? '🎵' : '🖼️' }}
+            {{ material.type === 'video' ? '🎬' : material.type === 'audio' ? '🎵' : material.type === 'sticker' ? '✨' : '🖼️' }}
           </div>
           <span v-if="material.duration" class="duration-badge">
             {{ formatDuration(material.duration) }}
@@ -195,8 +247,11 @@ function handleMaterialDragStart(e: DragEvent, material: Material) {
 
       <!-- 空状态 -->
       <div v-if="!filteredMaterials.length" class="empty-state">
-        <p>暂无{{ activeTab === 'video' ? '视频' : activeTab === 'audio' ? '音频' : '图片' }}素材</p>
+        <p>暂无素材</p>
         <p class="empty-hint">上传或拖拽文件到此处</p>
+        <button v-if="activeTab === 'sticker'" @click.stop="addMockSticker" style="margin-top:10px;padding:4px 8px;cursor:pointer;">
+           生成演示贴纸
+        </button>
       </div>
     </div>
   </div>

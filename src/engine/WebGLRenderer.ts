@@ -2,7 +2,7 @@
  * WebGL 渲染器
  * 使用 WebGL 实现 GPU 加速的视频帧渲染和滤镜特效
  */
-import type { FilterParams } from '@/types'
+import type { FilterParams, Transform } from '@/types'
 
 // 顶点着色器
 const VERTEX_SHADER = `
@@ -208,6 +208,62 @@ const TRANSITION_FRAGMENT_SHADER = `
   }
 `
 
+// 叠加层顶点着色器
+const OVERLAY_VERTEX_SHADER = `
+  attribute vec2 a_position; // 标准 Quad (-1 到 1)
+  attribute vec2 a_texCoord;
+  varying vec2 v_texCoord;
+
+  uniform vec2 u_resolution; // 画布分辨率 (px)
+  uniform vec2 u_imgSize;    // 图片分辨率 (px)
+  uniform vec2 u_translation;// 位置 (0.0 - 1.0)
+  uniform vec2 u_scale;      // 缩放 (x, y) - 支持非等比缩放
+  uniform float u_rotation;  // 旋转 (弧度)
+
+  void main() {
+    // 1. 转换到像素空间 (Pixel Space)
+    // 基础尺寸：图片的原始像素大小 * 缩放倍率
+    // a_position 是 2x2 的正方形 (-1~1)，所以乘以 0.5 得到 (-0.5~0.5) 作为单位基准
+    vec2 pixelSize = u_imgSize * u_scale;
+    vec2 pixelPos = a_position * 0.5 * pixelSize;
+
+    // 2. 旋转 (在像素空间进行，保证各向同性，不会变形)
+    float c = cos(u_rotation);
+    float s = sin(u_rotation);
+    mat2 rotMat = mat2(c, -s, s, c);
+    pixelPos = rotMat * pixelPos;
+
+    // 3. 位移 (在像素空间计算)
+    // u_translation 是 0~1 的比例坐标，(0,0) 为左上角
+    // 转换到 WebGL 坐标系 (中心为 0,0，Y轴向上)
+    // X: (0~1) -> (-0.5W ~ 0.5W)
+    // Y: (0~1) -> (0.5H ~ -0.5H) (因为屏幕坐标 Y 向下，WebGL Y 向上，需要翻转)
+    float offsetX = (u_translation.x - 0.5) * u_resolution.x;
+    float offsetY = (0.5 - u_translation.y) * u_resolution.y;
+    
+    pixelPos += vec2(offsetX, offsetY);
+
+    // 4. 投影到裁剪空间 (Clip Space)
+    // 像素坐标 / (分辨率/2) = Clip 坐标 (-1 ~ 1)
+    gl_Position = vec4(pixelPos / (u_resolution * 0.5), 0.0, 1.0);
+    
+    v_texCoord = a_texCoord;
+  }
+`
+
+// 叠加层片段着色器
+const OVERLAY_FRAGMENT_SHADER = `
+  precision mediump float;
+  varying vec2 v_texCoord;
+  uniform sampler2D u_texture;
+  uniform float u_opacity;
+
+  void main() {
+    vec4 color = texture2D(u_texture, v_texCoord);
+    gl_FragColor = color * u_opacity;
+  }
+`
+
 export class WebGLRenderer {
   private canvas: HTMLCanvasElement | OffscreenCanvas
   private gl: WebGLRenderingContext | null = null
@@ -220,6 +276,11 @@ export class WebGLRenderer {
   private transitionProgram: WebGLProgram | null = null
   private textureB: WebGLTexture | null = null  // 第二个视频帧纹理
   private transitionUniforms: Record<string, WebGLUniformLocation | null> = {}
+  
+  // 叠加层 (Sticker/PIP)
+  private overlayProgram: WebGLProgram | null = null
+  private overlayBuffer: WebGLBuffer | null = null    // 独立顶点缓冲区，避免被主流程污染
+  private overlayTexBuffer: WebGLBuffer | null = null // 独立UV缓冲区
   
   // Uniform 位置
   private uniforms: Record<string, WebGLUniformLocation | null> = {}
@@ -553,6 +614,9 @@ export class WebGLRenderer {
       ])
     }
     
+    // [关键修复] 确保使用正确的 WebGL 程序
+    this.gl.useProgram(this.program)
+    
     // 更新顶点位置缓冲
     this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.positionBuffer)
     this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.DYNAMIC_DRAW)
@@ -597,7 +661,10 @@ export class WebGLRenderer {
    * 简单渲染（不计算裁剪）
    */
   private renderFrameSimple(source: TexImageSource): void {
-    if (!this.gl || !this.texture) return
+    if (!this.gl || !this.texture || !this.program) return
+    
+    // [关键修复] 确保使用正确的 WebGL 程序
+    this.gl.useProgram(this.program)
     
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture)
     this.gl.texImage2D(
@@ -754,5 +821,147 @@ export class WebGLRenderer {
     this.gl = null
     this.program = null
     this.texture = null
+    
+    // 清理叠加层资源
+    if (this.gl) {
+        if (this.overlayBuffer) this.gl.deleteBuffer(this.overlayBuffer)
+        if (this.overlayTexBuffer) this.gl.deleteBuffer(this.overlayTexBuffer)
+        if (this.overlayProgram) this.gl.deleteProgram(this.overlayProgram)
+    }
+    this.overlayBuffer = null
+    this.overlayTexBuffer = null
+    this.overlayProgram = null
+  }
+
+  /**
+   * 渲染叠加层 (贴纸/画中画)
+   * 必须在 renderFrame 之后调用
+   */
+  renderOverlay(source: CanvasImageSource, transform: Transform): void {
+    if (!this.gl) return
+    if (!this.overlayProgram) {
+      this.initOverlay()
+    }
+    if (!this.overlayProgram) return
+
+    const gl = this.gl
+    gl.useProgram(this.overlayProgram)
+
+    // 1. 绑定并上传纹理
+    // 注意：这里复用 this.texture (主纹理)，如果想避免冲突可以使用独立的 textureOverlay
+    // 但为了节省显存和逻辑，复用是可行的，因为每次 draw 都会重新绑定
+    if (!this.texture) {
+      this.texture = gl.createTexture()
+    }
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, this.texture)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    
+    // 上传纹理数据
+    try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source as any)
+    } catch (e) {
+        console.warn('Failed to upload overlay texture', e)
+        return
+    }
+    
+    // 2. 开启混合
+    gl.enable(gl.BLEND)
+    // 假设素材是标准的 PNG/Image, 未预乘 Alpha
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+
+    // 3. 获取源尺寸
+    let sourceWidth = 0
+    let sourceHeight = 0
+    if (source instanceof HTMLVideoElement) {
+        sourceWidth = source.videoWidth
+        sourceHeight = source.videoHeight
+    } else if (source instanceof HTMLImageElement) {
+        sourceWidth = source.naturalWidth
+        sourceHeight = source.naturalHeight
+    } else if (typeof VideoFrame !== 'undefined' && source instanceof VideoFrame) {
+        sourceWidth = source.displayWidth
+        sourceHeight = source.displayHeight
+    } else {
+        sourceWidth = (source as any).width || 0
+        sourceHeight = (source as any).height || 0
+    }
+    
+    if (sourceWidth === 0 || sourceHeight === 0) return
+
+    // 4. 设置 Uniforms
+    const uResolution = gl.getUniformLocation(this.overlayProgram, 'u_resolution')
+    const uImgSize = gl.getUniformLocation(this.overlayProgram, 'u_imgSize')
+    const uTranslation = gl.getUniformLocation(this.overlayProgram, 'u_translation')
+    const uScale = gl.getUniformLocation(this.overlayProgram, 'u_scale')
+    const uRotation = gl.getUniformLocation(this.overlayProgram, 'u_rotation')
+    const uOpacity = gl.getUniformLocation(this.overlayProgram, 'u_opacity')
+    const uTexture = gl.getUniformLocation(this.overlayProgram, 'u_texture')
+
+    gl.uniform1i(uTexture, 0)
+    gl.uniform2f(uResolution, this.canvas.width, this.canvas.height)
+    gl.uniform2f(uImgSize, sourceWidth, sourceHeight)
+    
+    gl.uniform2f(uTranslation, transform.x / 100, transform.y / 100)
+    // 支持非等比缩放：优先使用 scaleX/scaleY，否则回退到 scale
+    const scaleX = transform.scaleX ?? transform.scale
+    const scaleY = transform.scaleY ?? transform.scale
+    gl.uniform2f(uScale, scaleX, scaleY)
+    gl.uniform1f(uRotation, transform.rotation * Math.PI / 180)
+    gl.uniform1f(uOpacity, transform.opacity)
+
+    // 5. 绑定独立缓冲区 (确保几何形状为标准正方形，不受 renderFrame 裁剪影响)
+    if (this.overlayBuffer) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayBuffer)
+        const posLoc = gl.getAttribLocation(this.overlayProgram, 'a_position')
+        gl.enableVertexAttribArray(posLoc)
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    if (this.overlayTexBuffer) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayTexBuffer)
+        const texLoc = gl.getAttribLocation(this.overlayProgram, 'a_texCoord')
+        gl.enableVertexAttribArray(texLoc)
+        gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    
+    // 6. 恢复状态
+    gl.disable(gl.BLEND)
+  }
+
+  private initOverlay() {
+    if (!this.gl) return
+    this.overlayProgram = this.createProgram(OVERLAY_VERTEX_SHADER, OVERLAY_FRAGMENT_SHADER)
+    
+    // 初始化标准 Quad Strip 缓冲区 (-1~1)
+    // 顺序: BL, BR, TL, TR
+    const positions = new Float32Array([
+      -1, -1,
+       1, -1,
+      -1,  1,
+       1,  1
+    ])
+    this.overlayBuffer = this.gl.createBuffer()
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.overlayBuffer)
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW)
+    
+    // UV 坐标 (0,0 对应 BL)
+    // WebGL 默认不翻转 Y，纹理数据 (0,0) 是图像 Top-Left。
+    // 为了让图像 Top-Left 显示在 Quad TL (-1,1):
+    // TL (-1,1) 需要 UV (0,0)
+    // BL (-1,-1) 需要 UV (0,1)
+    const texCoords = new Float32Array([
+      0, 1, // BL
+      1, 1, // BR
+      0, 0, // TL
+      1, 0  // TR
+    ])
+    this.overlayTexBuffer = this.gl.createBuffer()
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.overlayTexBuffer)
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, texCoords, this.gl.STATIC_DRAW)
   }
 }
