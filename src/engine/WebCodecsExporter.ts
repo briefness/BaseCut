@@ -1,7 +1,7 @@
 /**
  * WebCodecs 加速导出器
  * 使用 Mediabunny + WebCodecs API 进行硬件加速视频编码
- * 支持：视频拼接、音频混合、字幕烧录
+ * 支持：视频拼接、音频混合、字幕烧录、视频特效
  */
 import {
   Output,
@@ -13,9 +13,10 @@ import {
   QUALITY_MEDIUM,
   QUALITY_LOW
 } from 'mediabunny'
-import type { Subtitle, Transform } from '@/types'
+import type { Subtitle, Transform, VideoEffect } from '@/types'
 import { subtitleRenderer, type RenderContext } from '@/utils/SubtitleRenderer'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
+import { EffectManager } from '@/engine/EffectManager'
 
 // 导出片段信息
 export interface WebCodecsExportClip {
@@ -24,6 +25,7 @@ export interface WebCodecsExportClip {
   duration: number                // 片段时长（秒）
   inPoint: number                 // 素材入点（秒）
   outPoint: number                // 素材出点（秒）
+  effects?: VideoEffect[]         // 片段上的特效列表
 }
 
 // 字幕片段信息
@@ -77,6 +79,8 @@ export class WebCodecsExporter {
   private progressCallback: ((progress: number) => void) | null = null
   private aborted = false
   private renderer: WebGLRenderer | null = null
+  // [新增] 独立的特效管理器实例，避免破坏播放器的全局状态
+  private exportEffectManager: EffectManager | null = null
 
   /**
    * 检测浏览器是否支持 WebCodecs
@@ -171,7 +175,16 @@ export class WebCodecsExporter {
     const webglCanvas = document.createElement('canvas')
     webglCanvas.width = width
     webglCanvas.height = height
-    this.renderer = new WebGLRenderer(webglCanvas)
+    // [修复] 使用不初始化 EffectManager 的版本，避免破坏全局状态
+    this.renderer = new WebGLRenderer(webglCanvas, { skipEffectManagerInit: true })
+    
+    // [新增] 创建独立的 EffectManager 用于导出
+    this.exportEffectManager = new EffectManager()
+    const renderContext = this.renderer.getRenderContext()
+    if (renderContext) {
+      this.exportEffectManager.init(renderContext)
+      console.log('[WebCodecsExporter] 特效管理器已初始化')
+    }
 
     // 2. 创建合成画布（用于字幕叠加和最终输出）
     const canvas = document.createElement('canvas')
@@ -345,8 +358,26 @@ export class WebCodecsExporter {
           const clipTime = activeClip.inPoint + (timelineTime - activeClip.startTime)
           activeClip.videoElement.currentTime = clipTime
           await this.waitForSeek(activeClip.videoElement)
-          // WebGL 渲染单帧
-          this.renderer.renderFrame(activeClip.videoElement)
+          
+          // [修复] 应用特效渲染
+          const effects = activeClip.effects || []
+          if (effects.length > 0 && this.exportEffectManager) {
+            // 先渲染基础帧到纹理
+            this.renderer.renderFrame(activeClip.videoElement)
+            // 使用公共方法获取纹理
+            const texture = this.renderer.getTexture()
+            if (texture) {
+              // 应用特效链
+              this.exportEffectManager.applyEffects(texture, effects, clipTime, timelineTime)
+              // 添加调试日志（只在第一帧输出）
+              if (frameIndex === 0) {
+                console.log(`[WebCodecsExporter] 应用特效: 共 ${effects.length} 个`, effects.map(e => e.type))
+              }
+            }
+          } else {
+            // 无特效，直接渲染
+            this.renderer.renderFrame(activeClip.videoElement)
+          }
         } else if (this.renderer) {
            // 黑屏 (WebGL渲染器负责清空)
            this.renderer.clear()

@@ -3,6 +3,9 @@
  * 使用 WebGL 实现 GPU 加速的视频帧渲染和滤镜特效
  */
 import type { FilterParams, Transform } from '@/types'
+import type { VideoEffect } from '@/types/effects'
+import { effectManager, type EffectRenderContext } from './EffectManager'
+
 
 // 顶点着色器
 const VERTEX_SHADER = `
@@ -294,8 +297,12 @@ export class WebGLRenderer {
     blur: 0
   }
 
-  constructor(canvas: HTMLCanvasElement | OffscreenCanvas) {
+  // [新增] 构造选项
+  private options: { skipEffectManagerInit?: boolean } = {}
+
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options?: { skipEffectManagerInit?: boolean }) {
     this.canvas = canvas
+    this.options = options || {}
     this.init()
   }
 
@@ -339,6 +346,65 @@ export class WebGLRenderer {
     
     // 初始化转场程序
     this.initTransitionProgram()
+    
+    // [修复] 条件性初始化特效管理器
+    // 导出时使用独立的 EffectManager，避免破坏播放器的全局状态
+    if (!this.options.skipEffectManagerInit) {
+      this.initEffectManager()
+    }
+  }
+  
+  /**
+   * 初始化特效管理器
+   * 传递 WebGL 上下文和必要的资源给 EffectManager
+   */
+  private initEffectManager(): void {
+    if (!this.gl) return
+    
+    const context: EffectRenderContext = {
+      gl: this.gl,
+      canvas: this.canvas,
+      createProgram: this.createProgram.bind(this),
+      positionBuffer: this.positionBuffer,
+      texCoordBuffer: this.texCoordBuffer
+    }
+    
+    effectManager.init(context)
+  }
+  
+  /**
+   * 渲染带特效的视频帧
+   * @param source 视频源
+   * @param effects 要应用的特效列表
+   * @param timeInClip 片段内时间（秒）
+   * @param globalTime 全局时间（秒）
+   * @param cropMode 裁剪模式
+   */
+  renderFrameWithEffects(
+    source: TexImageSource,
+    effects: VideoEffect[],
+    timeInClip: number,
+    globalTime: number,
+    cropMode: 'cover' | 'contain' | 'fill' = 'contain'
+  ): void {
+    if (!this.gl || !this.texture || !this.program) return
+    
+    // 如果没有特效，直接渲染
+    if (!effects || effects.length === 0) {
+      this.renderFrame(source, cropMode)
+      return
+    }
+    
+    // 先渲染基础帧到纹理
+    this.renderFrame(source, cropMode)
+    
+    // 应用特效
+    effectManager.applyEffects(
+      this.texture,
+      effects,
+      timeInClip,
+      globalTime
+    )
   }
   
   /**
@@ -487,6 +553,28 @@ export class WebGLRenderer {
       blur: 0
     }
     this.updateFilterUniforms()
+  }
+
+  /**
+   * 获取当前纹理（供导出时使用自定义 EffectManager）
+   */
+  getTexture(): WebGLTexture | null {
+    return this.texture
+  }
+
+  /**
+   * 获取渲染上下文（供初始化自定义 EffectManager）
+   */
+  getRenderContext(): EffectRenderContext | null {
+    if (!this.gl) return null
+    
+    return {
+      gl: this.gl,
+      canvas: this.canvas,
+      createProgram: this.createProgram.bind(this),
+      positionBuffer: this.positionBuffer,
+      texCoordBuffer: this.texCoordBuffer
+    }
   }
 
   /**

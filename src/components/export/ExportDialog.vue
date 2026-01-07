@@ -5,6 +5,7 @@ import { WebCodecsExporter, webCodecsExporter, type WebCodecsExportClip, type We
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
+import { useEffectsStore } from '@/stores/effects'
 
 // Props
 interface Props {
@@ -23,6 +24,7 @@ const emit = defineEmits<{
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
 const projectStore = useProjectStore()
+const effectsStore = useEffectsStore()
 
 // 编码器状态
 const webCodecsSupported = ref(false)
@@ -218,21 +220,64 @@ function reset() {
 
 // 使用 WebCodecs 导出
 async function exportWithWebCodecs(): Promise<Blob> {
-  // 准备视频元素 - 先按时间排序，确保与转场索引匹配
-  const sortedExportableClips = [...exportableClips.value].sort((a, b) => a.startTime - b.startTime)
+  // [修复] 直接从 timeline 获取带 clipId 的完整 clip 信息
+  // 这样才能通过 effectsStore 获取每个 clip 的特效
+  interface ClipWithMaterial {
+    clipId: string
+    file: File
+    startTime: number
+    duration: number
+    inPoint: number
+    outPoint: number
+  }
+  
+  const clipsWithMaterial: ClipWithMaterial[] = []
+  
+  for (const track of timelineStore.videoTracks) {
+    for (const clip of track.clips) {
+      if (!clip.materialId) continue
+      
+      const material = resourceStore.getMaterial(clip.materialId)
+      if (!material || material.type !== 'video') continue
+      
+      if (!material.file) {
+        console.warn('[ExportDialog] 跳过无本地文件的片段:', clip.id)
+        continue
+      }
+      
+      clipsWithMaterial.push({
+        clipId: clip.id,
+        file: material.file,
+        startTime: clip.startTime,
+        duration: clip.duration,
+        inPoint: clip.inPoint,
+        outPoint: clip.outPoint
+      })
+    }
+  }
+  
+  // 按时间排序
+  const sortedClipsWithMaterial = [...clipsWithMaterial].sort((a, b) => a.startTime - b.startTime)
+  
+  // 准备视频元素 - 包含特效
   const webCodecsClips: WebCodecsExportClip[] = []
   
-  for (const clip of sortedExportableClips) {
+  for (const clip of sortedClipsWithMaterial) {
     const videoElement = await WebCodecsExporter.createVideoElement(
       URL.createObjectURL(clip.file)
     )
+    
+    // [关键] 从 effectsStore 获取此片段的特效
+    const clipEffects = effectsStore.getClipEffects(clip.clipId)
+    console.log(`[ExportDialog] 片段 ${clip.clipId} 特效数: ${clipEffects.length}`, clipEffects)
     
     webCodecsClips.push({
       videoElement,
       startTime: clip.startTime,
       duration: clip.duration,
       inPoint: clip.inPoint,
-      outPoint: clip.outPoint
+      outPoint: clip.outPoint,
+      effects: clipEffects.length > 0 ? clipEffects : undefined
     })
   }
   
@@ -281,22 +326,9 @@ async function exportWithWebCodecs(): Promise<Blob> {
   const exportTransitions: WebCodecsTransition[] = []
   
   for (const trans of timelineStore.transitions) {
-    // 找到导出片段中对应的索引
-    const clipAIndex = sortedExportableClips.findIndex(c => {
-      const track = timelineStore.tracks.find(t => 
-        t.clips.some(tc => tc.id === trans.clipAId)
-      )
-      const sourceClip = track?.clips.find(tc => tc.id === trans.clipAId)
-      return sourceClip && Math.abs(c.startTime - sourceClip.startTime) < 0.01
-    })
-    
-    const clipBIndex = sortedExportableClips.findIndex(c => {
-      const track = timelineStore.tracks.find(t => 
-        t.clips.some(tc => tc.id === trans.clipBId)
-      )
-      const sourceClip = track?.clips.find(tc => tc.id === trans.clipBId)
-      return sourceClip && Math.abs(c.startTime - sourceClip.startTime) < 0.01
-    })
+    // 找到导出片段中对应的索引（通过 clipId 直接匹配）
+    const clipAIndex = sortedClipsWithMaterial.findIndex(c => c.clipId === trans.clipAId)
+    const clipBIndex = sortedClipsWithMaterial.findIndex(c => c.clipId === trans.clipBId)
     
     console.log(`[ExportDialog] 转场: ${trans.type}, clipA=${clipAIndex}, clipB=${clipBIndex}`)
     

@@ -5,6 +5,7 @@ import '@leafer-in/editor'
 import { useTimelineStore } from '@/stores/timeline'
 import { useProjectStore } from '@/stores/project'
 import { useResourceStore } from '@/stores/resource'
+import { useEffectsStore } from '@/stores/effects'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 import { HLSPlayer } from '@/engine/HLSPlayer'
 import { frameExtractor } from '@/utils/FrameExtractor'
@@ -13,6 +14,7 @@ import { subtitleRenderer } from '@/utils/SubtitleRenderer'
 const timelineStore = useTimelineStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
+const effectsStore = useEffectsStore()
 
 // Canvas 元素和渲染器
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -626,7 +628,19 @@ function renderCurrentFrame(renderTime: number) {
       // [修复] 防止源切换时的脏帧：如果正在切换片段(isNewClip)，
       // 即使 readyState 还没变，也不应该渲染 videoElement（它可能还持有上一段的画面）
       if (!isNewClip && videoElement.readyState >= 2) {
-        renderer.renderFrame(videoElement)
+        // 计算片段内时间（用于特效）
+        const clipTime = renderTime - videoClip.startTime + videoClip.inPoint
+        
+        // 获取当前片段的特效列表
+        const clipEffects = effectsStore.getActiveEffects(videoClip.id, clipTime)
+        
+        if (clipEffects.length > 0) {
+          // 有特效时，使用带特效的渲染
+          renderer.renderFrameWithEffects(videoElement, clipEffects, clipTime, renderTime)
+        } else {
+          // 无特效时，使用普通渲染
+          renderer.renderFrame(videoElement)
+        }
         
         const subtitleTime = timelineStore.isSeeking ? timelineStore.seekingTime : timelineStore.currentTime
         renderPostEffects(subtitleTime)

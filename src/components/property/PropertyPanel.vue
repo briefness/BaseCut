@@ -3,12 +3,19 @@ import { computed, ref } from 'vue'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
+import { useEffectsStore } from '@/stores/effects'
 import SubtitleEditor from './SubtitleEditor.vue'
+import EffectPanel from '../effect/EffectPanel.vue'
+import EffectProperty from '../effect/EffectProperty.vue'
 import { TRANSITION_PRESETS, type TransitionType } from '@/types'
 
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
 const projectStore = useProjectStore()
+const effectsStore = useEffectsStore()
+
+// 当前激活的 Tab：'property' | 'effect'
+const activeTab = ref<'property' | 'effect'>('property')
 
 // 选中的片段
 const selectedClip = computed(() => timelineStore.selectedClip)
@@ -102,11 +109,26 @@ function deleteClip() {
 
 <template>
   <div class="property-panel">
-    <div class="panel-header">
-      <h3>属性</h3>
+    <!-- Tab 导航 -->
+    <div class="panel-tabs">
+      <button 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'property' }"
+        @click="activeTab = 'property'"
+      >
+        📋 属性
+      </button>
+      <button 
+        class="tab-btn" 
+        :class="{ active: activeTab === 'effect' }"
+        @click="activeTab = 'effect'"
+      >
+        ✨ 特效
+      </button>
     </div>
 
-    <div class="panel-content">
+    <!-- 属性面板 -->
+    <div v-show="activeTab === 'property'" class="panel-content">
       <!-- 无选中状态 -->
       <div v-if="!selectedClip" class="empty-state">
         <div class="empty-icon">📋</div>
@@ -260,6 +282,41 @@ function deleteClip() {
             🗑️ 删除{{ isTextClip ? '字幕' : '片段' }}
           </button>
         </section>
+      </div>
+    </div>
+
+    <!-- 特效面板 -->
+    <div v-show="activeTab === 'effect'" class="panel-content effect-panel-container">
+      <div class="effect-sections">
+        <!-- 特效选择 -->
+        <div class="effect-section">
+          <h4>添加特效</h4>
+          <EffectPanel />
+        </div>
+        
+        <!-- 特效属性编辑 -->
+        <div v-if="effectsStore.selectedEffect" class="effect-section">
+          <h4>特效参数</h4>
+          <EffectProperty />
+        </div>
+
+        <!-- 已添加特效列表 -->
+        <div v-if="selectedClip" class="effect-section">
+          <h4>已添加特效 ({{ effectsStore.getClipEffects(selectedClip.id).length }})</h4>
+          <div class="effect-list">
+            <div 
+              v-for="effect in effectsStore.getClipEffects(selectedClip.id)"
+              :key="effect.id"
+              class="effect-item"
+              :class="{ active: effectsStore.selectedEffectId === effect.id }"
+              @click="effectsStore.selectEffect(effect.id)"
+            >
+              <span class="effect-name">{{ effect.name }}</span>
+              <span class="effect-time">{{ effect.startTime.toFixed(1) }}s - {{ (effect.startTime + effect.duration).toFixed(1) }}s</span>
+              <button class="effect-delete" @click.stop="effectsStore.removeEffect(effect.id)">×</button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -613,5 +670,133 @@ textarea.input {
 
 .mt-8 {
   margin-top: 8px;
+}
+
+/* Tab 导航 */
+.panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-secondary);
+  flex-shrink: 0;
+}
+
+.tab-btn {
+  flex: 1;
+  padding: 12px 16px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.tab-btn.active {
+  color: var(--primary);
+}
+
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--primary);
+}
+
+/* 特效面板容器 */
+.effect-panel-container {
+  padding: 0;
+}
+
+.effect-sections {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.effect-section {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-secondary);
+}
+
+.effect-section:last-child {
+  border-bottom: none;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.effect-section h4 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+/* 已添加特效列表 */
+.effect-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.effect-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.effect-item:hover {
+  background: var(--bg-elevated);
+}
+
+.effect-item.active {
+  background: var(--primary-bg);
+  border: 1px solid var(--primary);
+}
+
+.effect-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.effect-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.effect-delete {
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.effect-delete:hover {
+  background: var(--error);
+  color: white;
 }
 </style>

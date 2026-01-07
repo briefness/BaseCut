@@ -1,4 +1,8 @@
 // ==================== 素材类型 ====================
+
+// 导出特效类型
+export * from './effects'
+
 export type MaterialType = 'video' | 'audio' | 'image' | 'sticker'
 
 // 素材处理状态
