@@ -120,6 +120,7 @@ function updateDisplayWaveform() {
 }
 
 // 绘制波形到 Canvas（竖条形 + 间隙样式）
+// 性能优化：使用 Path2D 批量构建路径，减少绘制调用
 function drawWaveform() {
   const canvas = canvasRef.value
   if (!canvas) return
@@ -154,14 +155,21 @@ function drawWaveform() {
   // 设置颜色（使用当前主题色）
   ctx.fillStyle = 'rgba(255, 255, 255, 0.65)'
   
+  // ==================== 性能优化：批量路径构建 ====================
+  // 使用 Path2D 收集所有条形路径，最后一次性 fill
+  // 减少 Canvas 状态切换和绘制调用次数
+  const path = new Path2D()
+  const peaksLen = peaks.length
+  
   for (let i = 0; i < numBars; i++) {
     // 获取这个区间的峰值（取最大值）
-    const startIdx = Math.floor(i * peaks.length / numBars)
-    const endIdx = Math.min(Math.floor((i + 1) * peaks.length / numBars), peaks.length)
+    const startIdx = Math.floor(i * peaksLen / numBars)
+    const endIdx = Math.min(Math.floor((i + 1) * peaksLen / numBars), peaksLen)
     
     let maxPeak = 0
     for (let j = startIdx; j < endIdx; j++) {
-      maxPeak = Math.max(maxPeak, peaks[j])
+      const p = peaks[j]
+      if (p > maxPeak) maxPeak = p
     }
     
     // 计算条形高度
@@ -171,11 +179,12 @@ function drawWaveform() {
     const x = i * barSpacing
     const y = height - paddingBottom - barHeight
     
-    // 绘制圆角条形
-    ctx.beginPath()
-    ctx.roundRect(x, y, barWidth, barHeight, 1)
-    ctx.fill()
+    // 添加圆角矩形到路径
+    path.roundRect(x, y, barWidth, barHeight, 1)
   }
+  
+  // 一次性填充所有条形
+  ctx.fill(path)
 }
 
 // IntersectionObserver 懒加载
