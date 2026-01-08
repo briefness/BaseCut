@@ -137,6 +137,7 @@ pnpm build
 5. [WebCodecs 视频导出](./docs/blog/05-webcodecs-export.md)
 6. [LeaferJS 贴纸系统](./docs/blog/06-leaferjs-sticker.md)
 7. [视频特效系统](./docs/blog/07-effect-system.md)
+8. [关键帧动画系统](./docs/blog/08-keyframe-animation.md)
 
 ---
 

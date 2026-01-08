@@ -110,9 +110,14 @@ function deleteClip() {
   timelineStore.removeClip(selectedClip.value.id)
 }
 
-// 自动重置 Tab：当选中不支持特效的片段时，强制切回属性页
+// 自动重置 Tab：当选中不支持特效或动画的片段时，强制切回属性页
 watch(selectedClip, () => {
+  // 如果当前 tab 是特效，但新选中的片段不支持特效，切回属性页
   if (!hasEffects.value && activeTab.value === 'effect') {
+    activeTab.value = 'property'
+  }
+  // 如果当前 tab 是动画，但新选中的片段不是视频（不支持动画），切回属性页
+  if (!isVideoClip.value && activeTab.value === 'animation') {
     activeTab.value = 'property'
   }
 })
