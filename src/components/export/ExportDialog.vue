@@ -6,6 +6,7 @@ import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
 import { useEffectsStore } from '@/stores/effects'
+import { useAnimationStore } from '@/stores/animation'
 
 // Props
 interface Props {
@@ -25,6 +26,7 @@ const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
 const projectStore = useProjectStore()
 const effectsStore = useEffectsStore()
+const animationStore = useAnimationStore()
 
 // 编码器状态
 const webCodecsSupported = ref(false)
@@ -271,13 +273,21 @@ async function exportWithWebCodecs(): Promise<Blob> {
     const clipEffects = effectsStore.getClipEffects(clip.clipId)
     console.log(`[ExportDialog] 片段 ${clip.clipId} 特效数: ${clipEffects.length}`, clipEffects)
     
+    // [新增] 从 animationStore 获取此片段的动画数据
+    const clipAnimation = animationStore.getClipAnimation(clip.clipId)
+    const hasAnimation = clipAnimation && clipAnimation.tracks.some(
+      t => t.enabled && t.keyframes.length > 0
+    )
+    console.log(`[ExportDialog] 片段 ${clip.clipId} 动画: ${hasAnimation ? '有' : '无'}`, clipAnimation)
+    
     webCodecsClips.push({
       videoElement,
       startTime: clip.startTime,
       duration: clip.duration,
       inPoint: clip.inPoint,
       outPoint: clip.outPoint,
-      effects: clipEffects.length > 0 ? clipEffects : undefined
+      effects: clipEffects.length > 0 ? clipEffects : undefined,
+      animation: hasAnimation ? clipAnimation : undefined  // [新增]
     })
   }
   

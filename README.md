@@ -6,8 +6,9 @@
   <img src="https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Vite-6.0+-646CFF?style=flat-square&logo=vite" alt="Vite">
   <img src="https://img.shields.io/badge/WebGL-2.0-990000?style=flat-square&logo=webgl" alt="WebGL">
+  <img src="https://img.shields.io/badge/WebCodecs-Enabled-FF6B6B?style=flat-square" alt="WebCodecs">
   <br>
-  <sub>基于 WebGL 与 HLS 的下一代云端视频剪辑解决方案</sub>
+  <sub>基于 WebGL 与 WebCodecs 的下一代云端视频剪辑解决方案</sub>
 </p>
 
 ---
@@ -22,8 +23,15 @@
 
 ### 🎨 专业级渲染能力
 - **WebGL 硬件加速**：全流程 GPU 图像处理，支持实时滤镜与特效。
+- **10+ 视频特效**：闪白、故障、老电影、径向模糊、色差、像素化、暗角、分屏等。
+- **Ping-Pong 渲染**：多特效链式叠加，状态隔离确保渲染一致性。
 - **多层级合成系统**：支持视频、图片、文字、贴纸等多轨道混合渲染。
 - **独立字幕层**：基于 Offscreen Canvas 的高性能字幕渲染，支持动态样式与精确时间轴对齐。
+
+### 🎬 专业导出能力
+- **WebCodecs 硬件编码**：利用 GPU 加速视频编码，导出速度提升 3-5 倍。
+- **预览导出一致**：统一渲染管线，所见即所得。
+- **FBO 预渲染**：确保特效、宽高比在导出时与预览完全一致。
 
 ### ☁️ 云原生工作流
 - **HLS 流媒体支持**：原生支持 m3u8 流媒体播放，无缝对接云端转码资源。
@@ -40,25 +48,28 @@
 vue-baseCut/
 ├── src/
 │   ├── engine/                  # 核心播放与渲染引擎
-│   │   ├── MediaController.ts   #多媒体总线控制（核心）
+│   │   ├── MediaController.ts   # 多媒体总线控制（核心）
 │   │   ├── VideoPool.ts         # 视频元素复用池（性能优化）
 │   │   ├── PlaybackClock.ts     # 高精度播放时钟
-│   │   ├── WebGLRenderer.ts     # WebGL 渲染器
+│   │   ├── WebGLRenderer.ts     # WebGL 渲染器（滤镜/特效/转场）
+│   │   ├── EffectManager.ts     # 特效管理器（Ping-Pong 渲染）
+│   │   ├── EffectShaders.ts     # GLSL 特效着色器集合
+│   │   ├── WebCodecsExporter.ts # WebCodecs 视频导出
 │   │   ├── HLSPlayer.ts         # HLS 流播放封装
 │   │   └── FFmpegCore.ts        # WASM 媒体处理核心
 │   │
 │   ├── components/              # UI 组件库
 │   │   ├── player/              # 播放器模块
-│   │   │   └── Player.vue       # 播放器主入口（集成渲染循环）
 │   │   ├── timeline/            # 时间轴模块
-│   │   │   └── ClipThumbnails.vue # 智能缩略图组件
-│   │   └── ...
+│   │   ├── effect/              # 特效面板
+│   │   └── export/              # 导出对话框
 │   │
-│   ├── utils/                   # 工具库
-│   │   ├── SubtitleRenderer.ts  # 字幕渲染引擎
-│   │   └── FrameExtractor.ts    # 帧提取与缓存工具
+│   ├── stores/                  # 状态管理 (Pinia)
+│   │   ├── timeline.ts          # 时间轴状态
+│   │   └── effects.ts           # 特效状态
 │   │
-│   └── stores/                  # 状态管理 (Pinia)
+│   └── types/                   # TypeScript 类型定义
+│       └── effects.ts           # 特效类型定义
 ```
 
 ### 渲染流程
@@ -68,8 +79,10 @@ graph TD
     Clock[PlaybackClock] -->|Tick| MC[MediaController]
     MC -->|Sync| VP[VideoPool]
     MC -->|Frame| Renderer[WebGLRenderer]
+    Renderer -->|FBO| EM[EffectManager]
+    EM -->|Ping-Pong| Effects[特效链]
+    Effects --> Canvas
     MC -->|Time| Subtitle[SubtitleRenderer]
-    Renderer --> Canvas
     Subtitle --> OverlayCanvas
 ```
 
@@ -96,27 +109,34 @@ pnpm build
 
 ---
 
-## 🔧 核心配置
+## 🎨 支持的视频特效
 
-### HLS 素材配置示例
-项目支持自动识别 HLS 流媒体资源。配置 `Material` 对象时：
+| 特效 | 描述 | 主要参数 |
+|------|------|----------|
+| Flash | 闪白效果 | 颜色、强度 |
+| Shake | 画面抖动 | 频率、方向 |
+| Glitch | 数字故障 | RGB分离、扫描线、块状干扰 |
+| Radial Blur | 径向模糊 | 中心点、采样数 |
+| Chromatic | 色差效果 | 角度 |
+| Pixelate | 像素化 | 像素大小 |
+| Invert | 反色 | - |
+| Film Grain | 老电影 | 颗粒、划痕、闪烁、复古色调 |
+| Vignette | 暗角效果 | 半径、柔和度 |
+| Split Screen | 分屏 | 分屏数、方向、间隔 |
 
-```typescript
-const material = {
-  id: 'video_01',
-  type: 'video',
-  // 优先使用 HLS 流地址
-  hlsUrl: 'https://example.com/videos/master.m3u8',
-  // 降级使用 Blob URL
-  blobUrl: 'blob:http://localhost:3000/...',
-  // 配置雪碧图以优化拖拽预览
-  filmstrip: {
-    url: 'https://example.com/videos/sprite.jpg',
-    interval: 1, // 关键帧间隔
-    ...
-  }
-}
-```
+---
+
+## 📚 技术博客
+
+深入了解项目实现细节：
+
+1. [技术选型与项目结构](./docs/blog/01-architecture.md)
+2. [时间轴数据模型](./docs/blog/02-timeline-state.md)
+3. [WebGL 渲染与滤镜](./docs/blog/03-webgl-rendering.md)
+4. [转场动画实现](./docs/blog/04-transitions.md)
+5. [WebCodecs 视频导出](./docs/blog/05-webcodecs-export.md)
+6. [LeaferJS 贴纸系统](./docs/blog/06-leaferjs-sticker.md)
+7. [视频特效系统](./docs/blog/07-effect-system.md)
 
 ---
 
@@ -125,11 +145,14 @@ const material = {
 - [x] **v0.1.0**: 基础轨道编辑，WebGL 渲染，HLS 播放
 - [x] **v0.2.0**: 播放引擎重构，引入 VideoPool 与 MediaController
 - [x] **v0.3.0**: 字幕系统与多轨道层级合成
-- [ ] **v0.4.0**: 关键帧动画系统
-- [ ] **v0.5.0**: 视频转场与 WebCodecs 导出优化
+- [x] **v0.4.0**: 视频特效系统（10+ 特效，Ping-Pong 渲染）
+- [x] **v0.5.0**: WebCodecs 硬件加速导出
+- [x] **v0.6.0**: 关键帧动画系统
+- [ ] **v0.7.0**: 音频特效与可视化
 
 ---
 
 <p align="center">
   <sub>Designed for Performance, Built for Creators.</sub>
 </p>
+

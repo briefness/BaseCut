@@ -7,6 +7,7 @@ import { useEffectsStore } from '@/stores/effects'
 import SubtitleEditor from './SubtitleEditor.vue'
 import EffectPanel from '../effect/EffectPanel.vue'
 import EffectProperty from '../effect/EffectProperty.vue'
+import AnimationPanel from '../animation/AnimationPanel.vue'
 import { TRANSITION_PRESETS, type TransitionType } from '@/types'
 
 const timelineStore = useTimelineStore()
@@ -14,8 +15,8 @@ const resourceStore = useResourceStore()
 const projectStore = useProjectStore()
 const effectsStore = useEffectsStore()
 
-// 当前激活的 Tab：'property' | 'effect'
-const activeTab = ref<'property' | 'effect'>('property')
+// 当前激活的 Tab：'property' | 'effect' | 'animation'
+const activeTab = ref<'property' | 'effect' | 'animation'>('property')
 
 // 选中的片段
 const selectedClip = computed(() => timelineStore.selectedClip)
@@ -135,6 +136,14 @@ watch(selectedClip, () => {
         @click="activeTab = 'effect'"
       >
         <span class="tab-icon">✨</span>特效
+      </button>
+      <button 
+        v-if="isVideoClip"
+        class="tab-btn" 
+        :class="{ active: activeTab === 'animation' }"
+        @click="activeTab = 'animation'"
+      >
+        <span class="tab-icon">🎬</span>动画
       </button>
       
       <div class="tab-spacer"></div>
@@ -386,6 +395,11 @@ watch(selectedClip, () => {
         </div>
       </div>
     </div>
+    
+    <!-- 动画面板 -->
+    <div v-show="activeTab === 'animation'" class="animation-panel-container">
+      <AnimationPanel />
+    </div>
   </div>
 </template>
 
@@ -489,6 +503,15 @@ watch(selectedClip, () => {
   display: flex;
   flex-direction: column;
   position: relative;
+}
+
+/* 动画面板容器 */
+.animation-panel-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .scrollbar-hide::-webkit-scrollbar {

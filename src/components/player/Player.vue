@@ -6,15 +6,18 @@ import { useTimelineStore } from '@/stores/timeline'
 import { useProjectStore } from '@/stores/project'
 import { useResourceStore } from '@/stores/resource'
 import { useEffectsStore } from '@/stores/effects'
+import { useAnimationStore } from '@/stores/animation'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 import { HLSPlayer } from '@/engine/HLSPlayer'
 import { frameExtractor } from '@/utils/FrameExtractor'
 import { subtitleRenderer } from '@/utils/SubtitleRenderer'
+import { getAnimatedTransform, createTransformMatrix } from '@/engine/AnimationEngine'
 
 const timelineStore = useTimelineStore()
 const projectStore = useProjectStore()
 const resourceStore = useResourceStore()
 const effectsStore = useEffectsStore()
+const animationStore = useAnimationStore()
 
 // Canvas 元素和渲染器
 const canvasRef = ref<HTMLCanvasElement | null>(null)
@@ -628,17 +631,26 @@ function renderCurrentFrame(renderTime: number) {
       // [修复] 防止源切换时的脏帧：如果正在切换片段(isNewClip)，
       // 即使 readyState 还没变，也不应该渲染 videoElement（它可能还持有上一段的画面）
       if (!isNewClip && videoElement.readyState >= 2) {
-        // 计算片段内时间（用于特效）
+        // 计算片段内时间（用于特效和动画）
         const clipTime = renderTime - videoClip.startTime + videoClip.inPoint
         
         // 获取当前片段的特效列表
         const clipEffects = effectsStore.getActiveEffects(videoClip.id, clipTime)
         
-        if (clipEffects.length > 0) {
-          // 有特效时，使用带特效的渲染
+        // 获取当前片段的动画数据
+        const clipAnimation = animationStore.getClipAnimation(videoClip.id)
+        const hasAnimation = clipAnimation && clipAnimation.tracks.some(t => t.enabled && t.keyframes.length > 0)
+        
+        if (hasAnimation) {
+          // 有动画时，计算动画变换并使用 renderFrameWithAnimation
+          const animTransform = getAnimatedTransform(clipAnimation!, clipTime)
+          const matrix = createTransformMatrix(animTransform)
+          renderer.renderFrameWithAnimation(videoElement, matrix, animTransform.opacity)
+        } else if (clipEffects.length > 0) {
+          // 无动画但有特效时，使用带特效的渲染
           renderer.renderFrameWithEffects(videoElement, clipEffects, clipTime, renderTime)
         } else {
-          // 无特效时，使用普通渲染
+          // 无动画无特效时，使用普通渲染
           renderer.renderFrame(videoElement)
         }
         

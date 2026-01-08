@@ -14,9 +14,11 @@ import {
   QUALITY_LOW
 } from 'mediabunny'
 import type { Subtitle, Transform, VideoEffect } from '@/types'
+import type { ClipAnimation } from '@/types/animation'
 import { subtitleRenderer, type RenderContext } from '@/utils/SubtitleRenderer'
 import { WebGLRenderer } from '@/engine/WebGLRenderer'
 import { EffectManager } from '@/engine/EffectManager'
+import { getAnimatedTransform, createTransformMatrix } from '@/engine/AnimationEngine'
 
 // 导出片段信息
 export interface WebCodecsExportClip {
@@ -26,6 +28,7 @@ export interface WebCodecsExportClip {
   inPoint: number                 // 素材入点（秒）
   outPoint: number                // 素材出点（秒）
   effects?: VideoEffect[]         // 片段上的特效列表
+  animation?: ClipAnimation       // [新增] 关键帧动画配置
 }
 
 // 字幕片段信息
@@ -357,17 +360,34 @@ export class WebCodecsExporter {
         
         if (activeClip && this.renderer) {
           const clipTime = activeClip.inPoint + (timelineTime - activeClip.startTime)
+          // 计算相对于片段起点的时间（用于动画计算）
+          const timeInClip = timelineTime - activeClip.startTime
+          
           activeClip.videoElement.currentTime = clipTime
           await this.waitForSeek(activeClip.videoElement)
           
-          // [修复] 使用统一渲染管线 (自动处理 FBO/Aspect Ratio/黑边)
-          // 这确保了导出时的特效渲染与预览完全一致，且不会出现拉伸
-          this.renderer.renderFrameWithEffects(
-            activeClip.videoElement,
-            activeClip.effects || [],
-            clipTime,
-            timelineTime
-          )
+          // [新增] 检查是否有关键帧动画
+          if (activeClip.animation && activeClip.animation.tracks.length > 0) {
+            // 计算动画变换
+            const animTransform = getAnimatedTransform(activeClip.animation, timeInClip)
+            const transformMatrix = createTransformMatrix(animTransform)
+            
+            // 使用动画渲染方法
+            this.renderer.renderFrameWithAnimation(
+              activeClip.videoElement,
+              transformMatrix,
+              animTransform.opacity,
+              'contain'
+            )
+          } else {
+            // 无动画，使用标准特效渲染管线
+            this.renderer.renderFrameWithEffects(
+              activeClip.videoElement,
+              activeClip.effects || [],
+              clipTime,
+              timelineTime
+            )
+          }
         } else if (this.renderer) {
            // 黑屏 (WebGL渲染器负责清空)
            this.renderer.clear()

@@ -267,6 +267,128 @@ const OVERLAY_FRAGMENT_SHADER = `
   }
 `
 
+// ==================== 关键帧动画变换着色器 ====================
+
+/**
+ * 动画顶点着色器
+ * 支持 4x4 变换矩阵，实现位置、缩放、旋转
+ * u_transform: 变换矩阵（列主序）
+ * u_resolution: 画布尺寸（用于像素到 NDC 转换）
+ */
+const ANIMATED_VERTEX_SHADER = `
+  attribute vec2 a_position;
+  attribute vec2 a_texCoord;
+  varying vec2 v_texCoord;
+  
+  uniform mat4 u_transform;    // 变换矩阵
+  uniform vec2 u_resolution;   // 画布尺寸
+  
+  void main() {
+    // 将 NDC 坐标（-1~1）转换为像素坐标
+    vec2 pixelPos = a_position * u_resolution * 0.5;
+    
+    // 应用变换矩阵
+    vec4 transformed = u_transform * vec4(pixelPos, 0.0, 1.0);
+    
+    // 转回 NDC 坐标
+    gl_Position = vec4(transformed.xy / (u_resolution * 0.5), 0.0, 1.0);
+    
+    v_texCoord = a_texCoord;
+  }
+`
+
+/**
+ * 动画片段着色器
+ * 支持透明度动画
+ */
+const ANIMATED_FRAGMENT_SHADER = `
+  precision mediump float;
+  
+  varying vec2 v_texCoord;
+  uniform sampler2D u_texture;
+  uniform float u_opacity;      // 透明度 (0~1)
+  
+  // 滤镜参数
+  uniform float u_brightness;
+  uniform float u_contrast;
+  uniform float u_saturation;
+  uniform float u_hue;
+  
+  // RGB 转 HSL
+  vec3 rgb2hsl(vec3 c) {
+    float maxC = max(max(c.r, c.g), c.b);
+    float minC = min(min(c.r, c.g), c.b);
+    float l = (maxC + minC) / 2.0;
+    
+    if (maxC == minC) {
+      return vec3(0.0, 0.0, l);
+    }
+    
+    float d = maxC - minC;
+    float s = l > 0.5 ? d / (2.0 - maxC - minC) : d / (maxC + minC);
+    float h;
+    
+    if (maxC == c.r) {
+      h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+    } else if (maxC == c.g) {
+      h = (c.b - c.r) / d + 2.0;
+    } else {
+      h = (c.r - c.g) / d + 4.0;
+    }
+    h /= 6.0;
+    
+    return vec3(h, s, l);
+  }
+  
+  // HSL 转 RGB
+  float hue2rgb(float p, float q, float t) {
+    if (t < 0.0) t += 1.0;
+    if (t > 1.0) t -= 1.0;
+    if (t < 1.0/6.0) return p + (q - p) * 6.0 * t;
+    if (t < 1.0/2.0) return q;
+    if (t < 2.0/3.0) return p + (q - p) * (2.0/3.0 - t) * 6.0;
+    return p;
+  }
+  
+  vec3 hsl2rgb(vec3 c) {
+    if (c.y == 0.0) {
+      return vec3(c.z);
+    }
+    
+    float q = c.z < 0.5 ? c.z * (1.0 + c.y) : c.z + c.y - c.z * c.y;
+    float p = 2.0 * c.z - q;
+    
+    return vec3(
+      hue2rgb(p, q, c.x + 1.0/3.0),
+      hue2rgb(p, q, c.x),
+      hue2rgb(p, q, c.x - 1.0/3.0)
+    );
+  }
+  
+  void main() {
+    vec4 color = texture2D(u_texture, v_texCoord);
+    vec3 rgb = color.rgb;
+    
+    // 应用亮度
+    rgb += u_brightness;
+    
+    // 应用对比度
+    rgb = (rgb - 0.5) * u_contrast + 0.5;
+    
+    // 应用饱和度和色相
+    vec3 hsl = rgb2hsl(rgb);
+    hsl.x = mod(hsl.x + u_hue, 1.0);
+    hsl.y *= u_saturation;
+    rgb = hsl2rgb(hsl);
+    
+    // Clamp 到有效范围
+    rgb = clamp(rgb, 0.0, 1.0);
+    
+    // 应用透明度
+    gl_FragColor = vec4(rgb, color.a) * u_opacity;
+  }
+`
+
 export class WebGLRenderer {
   private canvas: HTMLCanvasElement | OffscreenCanvas
   private gl: WebGLRenderingContext | null = null
@@ -306,6 +428,10 @@ export class WebGLRenderer {
   
   // 实例绑定的 EffectManager
   private effectManager: EffectManager
+
+  // [新增] 动画渲染程序
+  private animatedProgram: WebGLProgram | null = null
+  private animatedUniforms: Record<string, WebGLUniformLocation | null> = {}
 
   constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options?: { 
     skipEffectManagerInit?: boolean, 
@@ -361,10 +487,39 @@ export class WebGLRenderer {
     // 初始化转场程序
     this.initTransitionProgram()
     
+    // [新增] 初始化动画渲染程序
+    this.initAnimatedProgram()
+    
     // [修复] 条件性初始化特效管理器
     // 导出时使用独立的 EffectManager，避免破坏播放器的全局状态
     if (!this.options.skipEffectManagerInit) {
       this.initEffectManager()
+    }
+  }
+  
+  /**
+   * 初始化动画渲染程序
+   * 用于支持关键帧动画变换（位置、缩放、旋转、透明度）
+   */
+  private initAnimatedProgram(): void {
+    if (!this.gl) return
+    
+    this.animatedProgram = this.createProgram(ANIMATED_VERTEX_SHADER, ANIMATED_FRAGMENT_SHADER)
+    if (!this.animatedProgram) {
+      console.error('[WebGLRenderer] 动画程序创建失败')
+      return
+    }
+    
+    // 获取 uniform 位置
+    this.animatedUniforms = {
+      texture: this.gl.getUniformLocation(this.animatedProgram, 'u_texture'),
+      transform: this.gl.getUniformLocation(this.animatedProgram, 'u_transform'),
+      resolution: this.gl.getUniformLocation(this.animatedProgram, 'u_resolution'),
+      opacity: this.gl.getUniformLocation(this.animatedProgram, 'u_opacity'),
+      brightness: this.gl.getUniformLocation(this.animatedProgram, 'u_brightness'),
+      contrast: this.gl.getUniformLocation(this.animatedProgram, 'u_contrast'),
+      saturation: this.gl.getUniformLocation(this.animatedProgram, 'u_saturation'),
+      hue: this.gl.getUniformLocation(this.animatedProgram, 'u_hue')
     }
   }
   
@@ -384,6 +539,163 @@ export class WebGLRenderer {
     }
     
     this.effectManager.init(context)
+  }
+  
+  /**
+   * 渲染带动画变换的视频帧
+   * 支持关键帧动画：位置、缩放、旋转、透明度
+   * 
+   * @param source 视频源
+   * @param transformMatrix 4x4 变换矩阵（由 AnimationEngine.createTransformMatrix 生成）
+   * @param opacity 透明度（0-1）
+   * @param cropMode 裁剪模式
+   */
+  renderFrameWithAnimation(
+    source: TexImageSource,
+    transformMatrix: Float32Array,
+    opacity: number = 1,
+    cropMode: 'cover' | 'contain' | 'fill' = 'contain'
+  ): void {
+    if (!this.gl || !this.texture || !this.animatedProgram) return
+    
+    const gl = this.gl
+    
+    // 1. 状态重置（确保干净的起点）
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.useProgram(this.animatedProgram)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.disable(gl.DEPTH_TEST)
+    gl.disable(gl.CULL_FACE)
+    
+    // 2. 启用混合（支持透明度）
+    gl.enable(gl.BLEND)
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    
+    // 3. 获取源尺寸（用于计算正确的顶点位置）
+    let sourceWidth = 0
+    let sourceHeight = 0
+    
+    if (source instanceof HTMLVideoElement) {
+      sourceWidth = source.videoWidth
+      sourceHeight = source.videoHeight
+    } else if (source instanceof HTMLImageElement) {
+      sourceWidth = source.naturalWidth
+      sourceHeight = source.naturalHeight
+    } else if (source instanceof HTMLCanvasElement) {
+      sourceWidth = source.width
+      sourceHeight = source.height
+    }
+    
+    // 如果源尺寸无效，使用全屏
+    if (sourceWidth === 0 || sourceHeight === 0) {
+      sourceWidth = this.canvas.width
+      sourceHeight = this.canvas.height
+    }
+    
+    const canvasWidth = this.canvas.width
+    const canvasHeight = this.canvas.height
+    const sourceAspect = sourceWidth / sourceHeight
+    const canvasAspect = canvasWidth / canvasHeight
+    
+    // 4. 计算顶点位置（考虑 cropMode）
+    let positions: Float32Array
+    let texCoords: Float32Array
+    
+    if (cropMode === 'contain') {
+      // Contain 模式：保持源比例，可能有黑边
+      let scaleX = 1, scaleY = 1
+      
+      if (sourceAspect > canvasAspect) {
+        scaleY = canvasAspect / sourceAspect
+      } else {
+        scaleX = sourceAspect / canvasAspect
+      }
+      
+      positions = new Float32Array([
+        -scaleX, -scaleY,
+         scaleX, -scaleY,
+        -scaleX,  scaleY,
+        -scaleX,  scaleY,
+         scaleX, -scaleY,
+         scaleX,  scaleY
+      ])
+    } else if (cropMode === 'cover') {
+      // Cover 模式：填满且居中裁剪
+      positions = new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ])
+    } else {
+      // Fill 模式：拉伸填满
+      positions = new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ])
+    }
+    
+    // 纹理坐标（Y 翻转）
+    texCoords = new Float32Array([
+      0, 1,
+      1, 1,
+      0, 0,
+      0, 0,
+      1, 1,
+      1, 0
+    ])
+    
+    // 5. 绑定顶点缓冲
+    if (this.positionBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer)
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW)
+      const posLoc = gl.getAttribLocation(this.animatedProgram, 'a_position')
+      gl.enableVertexAttribArray(posLoc)
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    if (this.texCoordBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer)
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.DYNAMIC_DRAW)
+      const texLoc = gl.getAttribLocation(this.animatedProgram, 'a_texCoord')
+      gl.enableVertexAttribArray(texLoc)
+      gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    // 6. 上传纹理
+    gl.bindTexture(gl.TEXTURE_2D, this.texture)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    
+    // 7. 设置 Uniforms
+    gl.uniform1i(this.animatedUniforms.texture, 0)
+    gl.uniformMatrix4fv(this.animatedUniforms.transform, false, transformMatrix)
+    gl.uniform2f(this.animatedUniforms.resolution, canvasWidth, canvasHeight)
+    gl.uniform1f(this.animatedUniforms.opacity, opacity)
+    
+    // 滤镜参数
+    gl.uniform1f(this.animatedUniforms.brightness, this.filterParams.brightness)
+    gl.uniform1f(this.animatedUniforms.contrast, 1 + this.filterParams.contrast)
+    gl.uniform1f(this.animatedUniforms.saturation, 1 + this.filterParams.saturation)
+    gl.uniform1f(this.animatedUniforms.hue, this.filterParams.hue)
+    
+    // 8. 渲染
+    gl.viewport(0, 0, canvasWidth, canvasHeight)
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
+    
+    // 9. 恢复状态
+    gl.disable(gl.BLEND)
   }
   
   /**

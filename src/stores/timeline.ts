@@ -466,6 +466,32 @@ export const useTimelineStore = defineStore('timeline', () => {
     return activeClips
   }
 
+  /**
+   * 根据 ID 获取片段
+   */
+  function getClipById(clipId: string): Clip | null {
+    for (const track of tracks.value) {
+      const clip = track.clips.find(c => c.id === clipId)
+      if (clip) return clip
+    }
+    return null
+  }
+
+  /**
+   * 设置当前时间（别名，便于语义化调用）
+   */
+  function setCurrentTime(time: number): void {
+    seek(time)
+  }
+
+  /**
+   * 获取所有选中的片段 ID（兼容多选）
+   * 目前只支持单选，返回单个 ID 的数组
+   */
+  const selectedClipIds = computed(() => {
+    return selectedClipId.value ? [selectedClipId.value] : []
+  })
+
   // ==================== 转场操作 ====================
   
   /**
@@ -631,6 +657,10 @@ export const useTimelineStore = defineStore('timeline', () => {
     stopSeeking,
     // 工具方法
     getActiveClips,
-    reset
+    getClipById,
+    setCurrentTime,
+    reset,
+    // 计算属性（辅助）
+    selectedClipIds
   }
 })
