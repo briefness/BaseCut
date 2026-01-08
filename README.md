@@ -138,6 +138,7 @@ pnpm build
 6. [LeaferJS 贴纸系统](./docs/blog/06-leaferjs-sticker.md)
 7. [视频特效系统](./docs/blog/07-effect-system.md)
 8. [关键帧动画系统](./docs/blog/08-keyframe-animation.md)
+9. [性能优化](./docs/blog/09-performance-optimization.md)
 
 ---
 
