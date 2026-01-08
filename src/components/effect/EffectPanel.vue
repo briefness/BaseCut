@@ -96,11 +96,13 @@ function handleAddEffect(type: VideoEffectType) {
 <style scoped>
 .effect-panel {
   padding: 12px;
-  height: 100%;
+  /* height: 100%; Removed fixed height to allow scrolling in parent */
+  width: 100%;
   display: flex;
   flex-direction: column;
   background: var(--bg-secondary, #1a1a2e);
   color: var(--text-primary, #ffffff);
+  box-sizing: border-box;
 }
 
 /* 分类标签 */
@@ -108,7 +110,7 @@ function handleAddEffect(type: VideoEffectType) {
   display: flex;
   gap: 8px;
   margin-bottom: 16px;
-  flex-wrap: wrap;
+  flex-wrap: wrap; /* Ensure wrapping */
 }
 
 .category-tab {
@@ -130,14 +132,13 @@ function handleAddEffect(type: VideoEffectType) {
   background: var(--primary-color, #6366f1);
   color: #ffffff;
 }
-
 /* 特效卡片网格 */
 .effect-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 12px;
-  overflow-y: auto;
-  flex: 1;
+  /* overflow-y: auto; Removed internal scroll */
+  /* flex: 1; Removed flex expansion */
 }
 
 .effect-card {

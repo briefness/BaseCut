@@ -275,10 +275,15 @@ function handleDelete() {
 <style scoped>
 .effect-property {
   padding: 16px;
-  height: 100%;
-  overflow-y: auto;
+  /* height: 100%; Removed to allow parent scroll */
+  /* overflow-y: auto; Removed internal scroll */
   background: var(--bg-secondary, #1a1a2e);
   color: var(--text-primary, #ffffff);
+  box-sizing: border-box;
+}
+
+.effect-property * {
+  box-sizing: border-box;
 }
 
 .no-selection {

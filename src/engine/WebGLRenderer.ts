@@ -4,7 +4,7 @@
  */
 import type { FilterParams, Transform } from '@/types'
 import type { VideoEffect } from '@/types/effects'
-import { effectManager, type EffectRenderContext } from './EffectManager'
+import { effectManager as defaultEffectManager, type EffectRenderContext, type EffectManager } from './EffectManager'
 
 
 // 顶点着色器
@@ -298,11 +298,24 @@ export class WebGLRenderer {
   }
 
   // [新增] 构造选项
-  private options: { skipEffectManagerInit?: boolean } = {}
+  private options: { 
+    skipEffectManagerInit?: boolean, 
+    effectManager?: EffectManager,
+    preserveDrawingBuffer?: boolean // 是否保留绘图缓冲区 (导出时必需)
+  } = {}
+  
+  // 实例绑定的 EffectManager
+  private effectManager: EffectManager
 
-  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options?: { skipEffectManagerInit?: boolean }) {
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, options?: { 
+    skipEffectManagerInit?: boolean, 
+    effectManager?: EffectManager,
+    preserveDrawingBuffer?: boolean
+  }) {
     this.canvas = canvas
     this.options = options || {}
+    // 使用传入的实例或默认单例
+    this.effectManager = this.options.effectManager || defaultEffectManager
     this.init()
   }
 
@@ -311,7 +324,8 @@ export class WebGLRenderer {
     this.gl = this.canvas.getContext('webgl', {
       alpha: false,
       antialias: false,
-      powerPreference: 'high-performance'
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: this.options.preserveDrawingBuffer || false
     })
     
     if (!this.gl) {
@@ -369,7 +383,7 @@ export class WebGLRenderer {
       texCoordBuffer: this.texCoordBuffer
     }
     
-    effectManager.init(context)
+    this.effectManager.init(context)
   }
   
   /**
@@ -389,22 +403,140 @@ export class WebGLRenderer {
   ): void {
     if (!this.gl || !this.texture || !this.program) return
     
-    // 如果没有特效，直接渲染
+    // 如果没有特效，直接渲染到屏幕
     if (!effects || effects.length === 0) {
+      // [关键] 确保渲染到默认帧缓冲（屏幕）
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null)
       this.renderFrame(source, cropMode)
       return
     }
+
+    // 1. 确保 EffectManager 尺寸与画布一致 (防止视口不匹配导致的缩小/畸变)
+    this.effectManager.updateSize(this.canvas.width, this.canvas.height)
+
+    // 2. 预渲染流程：先把源画面渲染到 EffectManager 的 FBO 中
+    // 这样做的好处是 renderFrame 的裁剪/黑边逻辑会固化在纹理中，
+    // 后续特效处理（如 Glitch）基于这个"已合成"的画面，不会破坏纵横比。
+    const fbo = this.effectManager.getFramebuffer(0)
+    const fboTexture = this.effectManager.getTexture(0)
+
+    if (fbo && fboTexture) {
+      // 绑定 FBO
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, fbo)
+      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+      
+      // 清空 FBO
+      this.gl.clearColor(0, 0, 0, 0)
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT)
+
+      // 渲染源画面 (此时会绘制到 FBO 0)
+      this.renderFrame(source, cropMode)
+
+      // 解绑 FBO，恢复到屏幕
+      this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null)
+      this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+
+      // 3. 应用特效 (输入为 FBO 0 的纹理)
+      const effectsApplied = this.effectManager.applyEffects(
+        fboTexture,
+        effects,
+        timeInClip,
+        globalTime
+      )
+      
+      // [关键修复] 如果没有激活的特效，需要手动将 FBO 内容绘制到屏幕
+      // 这种情况发生在：片段附加了特效，但当前时间点不在特效的激活时间范围内
+      if (!effectsApplied) {
+        this.renderTextureToScreen(fboTexture)
+      }
+    } else {
+      // 降级处理：如果没有 FBO，必须先渲染到屏幕，再抓取屏幕内容，再应用特效
+      this.renderFrame(source, cropMode)
+      
+      // 抓取当前屏幕内容回纹理
+      this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture)
+      this.gl.copyTexImage2D(
+        this.gl.TEXTURE_2D, 0, this.gl.RGBA,
+        0, 0, this.canvas.width, this.canvas.height,
+        0
+      )
+      
+      const effectsApplied = this.effectManager.applyEffects(
+        this.texture,
+        effects,
+        timeInClip,
+        globalTime
+      )
+      
+      // 如果没有激活的特效，画面已经在屏幕上了（从 renderFrame），无需额外处理
+      // 但需要确保状态干净
+      if (!effectsApplied) {
+        // 画面已经正确渲染到屏幕，无需额外操作
+      }
+    }
+  }
+  
+  /**
+   * 将纹理直接渲染到屏幕
+   * 用于处理"片段有特效但当前帧无激活特效"的情况
+   * @param texture 要渲染的纹理
+   */
+  private renderTextureToScreen(texture: WebGLTexture): void {
+    if (!this.gl || !this.program) return
     
-    // 先渲染基础帧到纹理
-    this.renderFrame(source, cropMode)
+    const gl = this.gl
     
-    // 应用特效
-    effectManager.applyEffects(
-      this.texture,
-      effects,
-      timeInClip,
-      globalTime
-    )
+    // 确保渲染到屏幕
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    
+    // 使用基础着色器程序
+    gl.useProgram(this.program)
+    
+    // 设置状态
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, texture)
+    gl.disable(gl.BLEND)
+    gl.disable(gl.DEPTH_TEST)
+    
+    // 绑定顶点缓冲区（全屏 Quad）
+    if (this.positionBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer)
+      const positions = new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ])
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW)
+      const posLoc = gl.getAttribLocation(this.program, 'a_position')
+      gl.enableVertexAttribArray(posLoc)
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    if (this.texCoordBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer)
+      // FBO 纹理的 UV 不需要翻转
+      const texCoords = new Float32Array([
+        0, 0,
+        1, 0,
+        0, 1,
+        0, 1,
+        1, 0,
+        1, 1
+      ])
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.DYNAMIC_DRAW)
+      const texLoc = gl.getAttribLocation(this.program, 'a_texCoord')
+      gl.enableVertexAttribArray(texLoc)
+      gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    // 清屏并绘制
+    gl.clearColor(0, 0, 0, 1)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
   }
   
   /**
@@ -585,6 +717,20 @@ export class WebGLRenderer {
   renderFrame(source: TexImageSource, cropMode: 'cover' | 'contain' | 'fill' = 'contain'): void {
     if (!this.gl || !this.texture || !this.program) return
     
+    const gl = this.gl
+    
+    // [关键修复] 完整的 GL 状态重置 - 确保每次渲染都从干净状态开始
+    // 这是参考专业级 NLE 软件（如剪映/Premiere）的"状态沙箱"设计模式
+    // 注意：不在这里绑定 Framebuffer，因为可能在 FBO 内渲染
+    gl.useProgram(this.program)               // 确保使用正确的 Shader
+    gl.activeTexture(gl.TEXTURE0)             // 确保使用正确的纹理单元
+    gl.disable(gl.BLEND)                      // 禁用混合（视频渲染不需要）
+    gl.disable(gl.DEPTH_TEST)                 // 禁用深度测试（2D渲染不需要）
+    gl.disable(gl.SCISSOR_TEST)               // 禁用剪裁测试
+    gl.disable(gl.CULL_FACE)                  // 禁用面剔除
+    gl.colorMask(true, true, true, true)      // 确保所有颜色通道可写
+    gl.depthMask(true)                        // 确保深度可写（虽然禁用了）
+    
     // 获取源尺寸
     let sourceWidth = 0
     let sourceHeight = 0
@@ -722,6 +868,7 @@ export class WebGLRenderer {
     this.gl.vertexAttribPointer(texCoordLoc, 2, this.gl.FLOAT, false, 0, 0)
     
     // 更新纹理
+    this.gl.activeTexture(this.gl.TEXTURE0) // [修复] 显式激活纹理单元0，防止 EffectManager 状态残留导致黑屏
     this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture)
     this.gl.texImage2D(
       this.gl.TEXTURE_2D,
@@ -740,7 +887,7 @@ export class WebGLRenderer {
     
     // 绘制
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
-    this.gl.clearColor(0, 0, 0, 1)
+    this.gl.clearColor(0, 0, 0, 1) // 不透明黑色背景（确保导出视频正确）
     this.gl.clear(this.gl.COLOR_BUFFER_BIT)
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
   }
@@ -751,28 +898,71 @@ export class WebGLRenderer {
   private renderFrameSimple(source: TexImageSource): void {
     if (!this.gl || !this.texture || !this.program) return
     
-    // [关键修复] 确保使用正确的 WebGL 程序
-    this.gl.useProgram(this.program)
+    const gl = this.gl
     
-    this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture)
-    this.gl.texImage2D(
-      this.gl.TEXTURE_2D,
+    // [关键修复] 完整的 GL 状态重置（不改变 Framebuffer - 由调用者负责）
+    gl.useProgram(this.program)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.disable(gl.BLEND)
+    gl.disable(gl.DEPTH_TEST)
+    gl.disable(gl.SCISSOR_TEST)
+    gl.disable(gl.CULL_FACE)
+    gl.colorMask(true, true, true, true)
+    
+    // [关键修复] 重新绑定顶点缓冲区 - 确保不使用 EffectManager 的缓冲区
+    if (this.positionBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer)
+      // 使用标准全屏 Quad
+      const positions = new Float32Array([
+        -1, -1,
+         1, -1,
+        -1,  1,
+        -1,  1,
+         1, -1,
+         1,  1
+      ])
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW)
+      const posLoc = gl.getAttribLocation(this.program, 'a_position')
+      gl.enableVertexAttribArray(posLoc)
+      gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    if (this.texCoordBuffer) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer)
+      // 标准 UV 坐标（翻转 Y）
+      const texCoords = new Float32Array([
+        0, 1,
+        1, 1,
+        0, 0,
+        0, 0,
+        1, 1,
+        1, 0
+      ])
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.DYNAMIC_DRAW)
+      const texLoc = gl.getAttribLocation(this.program, 'a_texCoord')
+      gl.enableVertexAttribArray(texLoc)
+      gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
+    }
+    
+    gl.bindTexture(gl.TEXTURE_2D, this.texture)
+    gl.texImage2D(
+      gl.TEXTURE_2D,
       0,
-      this.gl.RGBA,
-      this.gl.RGBA,
-      this.gl.UNSIGNED_BYTE,
+      gl.RGBA,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
       source
     )
     
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE)
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE)
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR)
-    this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     
-    this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
-    this.gl.clearColor(0, 0, 0, 1)
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT)
-    this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height)
+    gl.clearColor(0, 0, 0, 1) // 不透明黑色背景
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    gl.drawArrays(gl.TRIANGLES, 0, 6)
   }
 
 
@@ -906,16 +1096,15 @@ export class WebGLRenderer {
       this.gl.deleteProgram(this.program)
     }
     
+    // 清理叠加层资源
+    if (this.overlayBuffer) this.gl.deleteBuffer(this.overlayBuffer)
+    if (this.overlayTexBuffer) this.gl.deleteBuffer(this.overlayTexBuffer)
+    if (this.overlayProgram) this.gl.deleteProgram(this.overlayProgram)
+    
     this.gl = null
     this.program = null
     this.texture = null
     
-    // 清理叠加层资源
-    if (this.gl) {
-        if (this.overlayBuffer) this.gl.deleteBuffer(this.overlayBuffer)
-        if (this.overlayTexBuffer) this.gl.deleteBuffer(this.overlayTexBuffer)
-        if (this.overlayProgram) this.gl.deleteProgram(this.overlayProgram)
-    }
     this.overlayBuffer = null
     this.overlayTexBuffer = null
     this.overlayProgram = null

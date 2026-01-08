@@ -62,6 +62,10 @@ export class EffectManager {
   private width: number = 1920
   private height: number = 1080
 
+  // [新增] 独立几何缓冲区 (避免复用 Renderer 的动态 Buffer)
+  private geometryBuffer: WebGLBuffer | null = null
+  private uvBuffer: WebGLBuffer | null = null
+
   /**
    * 初始化特效管理器
    * @param context 渲染上下文
@@ -73,7 +77,45 @@ export class EffectManager {
     this.height = context.canvas.height
     
     // 初始化双缓冲帧缓冲（用于特效链）
+    // 初始化双缓冲帧缓冲（用于特效链）
     this.initFramebuffers()
+    // 初始化几何数据
+    this.initBuffers()
+  }
+
+  /**
+   * 初始化独立几何缓冲区
+   * 标准全屏 Quad (-1~1) 和 UV (0~1)
+   */
+  private initBuffers(): void {
+    const gl = this.gl
+    if (!gl) return
+
+    // 顶点位置
+    const positions = new Float32Array([
+      -1, -1,
+       1, -1,
+      -1,  1,
+      -1,  1,
+       1, -1,
+       1,  1
+    ])
+    this.geometryBuffer = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.geometryBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW)
+
+    // 纹理坐标
+    const texCoords = new Float32Array([
+      0, 0,
+      1, 0,
+      0, 1,
+      0, 1,
+      1, 0,
+      1, 1
+    ])
+    this.uvBuffer = gl.createBuffer()
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.uvBuffer)
+    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW)
   }
 
   /**
@@ -405,6 +447,11 @@ export class EffectManager {
     let currentTexture = inputTexture
     this.currentFBIndex = 0
     
+    // [修复] 如果输入纹理就是当前帧缓冲的纹理，需要切换到另一个帧缓冲，避免读写冲突
+    if (this.frameTextures.length > 0 && currentTexture === this.frameTextures[this.currentFBIndex]) {
+      this.currentFBIndex = 1 - this.currentFBIndex
+    }
+    
     for (let i = 0; i < activeEffects.length; i++) {
       const effect = activeEffects[i]
       const isLast = i === activeEffects.length - 1
@@ -439,15 +486,15 @@ export class EffectManager {
       // 设置 uniform
       this.setEffectUniforms(compiled, effect, intensity, globalTime)
       
-      // 绑定缓冲区
-      if (context.positionBuffer) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, context.positionBuffer)
+      // 绑定缓冲区 (使用内部静态 Buffer)
+      if (this.geometryBuffer) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.geometryBuffer)
         gl.enableVertexAttribArray(compiled.attributes.position)
         gl.vertexAttribPointer(compiled.attributes.position, 2, gl.FLOAT, false, 0, 0)
       }
       
-      if (context.texCoordBuffer) {
-        gl.bindBuffer(gl.ARRAY_BUFFER, context.texCoordBuffer)
+      if (this.uvBuffer) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.uvBuffer)
         gl.enableVertexAttribArray(compiled.attributes.texCoord)
         gl.vertexAttribPointer(compiled.attributes.texCoord, 2, gl.FLOAT, false, 0, 0)
       }
@@ -461,6 +508,14 @@ export class EffectManager {
         this.currentFBIndex = 1 - this.currentFBIndex
       }
     }
+    
+    // [关键修复] 恢复 GL 状态，防止污染后续渲染
+    // 这是专业级 NLE 软件必须的"状态沙箱"逻辑
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.activeTexture(gl.TEXTURE0)
+    gl.bindTexture(gl.TEXTURE_2D, null)
+    gl.disable(gl.BLEND)
+    gl.useProgram(null) // 强制后续渲染重新设置 Program
     
     return true
   }
@@ -506,6 +561,20 @@ export class EffectManager {
   }
 
   /**
+   * 获取内部帧缓冲 (用于预渲染)
+   */
+  getFramebuffer(index: number): WebGLFramebuffer | null {
+    return this.framebuffers[index] || null
+  }
+
+  /**
+   * 获取内部纹理 (用于预渲染)
+   */
+  getTexture(index: number): WebGLTexture | null {
+    return this.frameTextures[index] || null
+  }
+
+  /**
    * 销毁所有资源
    */
   destroy(): void {
@@ -514,6 +583,12 @@ export class EffectManager {
     
     // 销毁帧缓冲
     this.destroyFramebuffers()
+    
+    // 销毁几何缓冲
+    if (this.geometryBuffer) gl.deleteBuffer(this.geometryBuffer)
+    if (this.uvBuffer) gl.deleteBuffer(this.uvBuffer)
+    this.geometryBuffer = null
+    this.uvBuffer = null
     
     // 销毁程序
     for (const compiled of this.programCache.values()) {

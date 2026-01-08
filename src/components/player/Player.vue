@@ -436,8 +436,8 @@ function renderCurrentFrame(renderTime: number) {
     }
   if (!renderer || !videoElement) return
   
-  // 同步音量
-  videoElement.volume = timelineStore.volume
+  // 同步音量 (限制在 0-1 之间防止报错)
+  videoElement.volume = Math.min(1.0, Math.max(0, timelineStore.volume))
   
   // 获取当前时间点的所有活跃片段（使用传入的渲染时间）
   const activeClips = timelineStore.getActiveClips(renderTime)
@@ -709,7 +709,9 @@ function renderCurrentFrame(renderTime: number) {
     const material = resourceStore.getMaterial(audioClip.materialId)
     if (material && material.type === 'audio') {
       // 使用片段独立音量（0-100 转为 0-1），如果没有设置则使用默认 40
-      audioElement.volume = ((audioClip.volume ?? 40) / 100) * timelineStore.volume
+      // [修复] 限制音量在 0-1 之间，防止超过 100% 时报错
+      const finalVolume = ((audioClip.volume ?? 40) / 100) * timelineStore.volume
+      audioElement.volume = Math.min(1.0, Math.max(0, finalVolume))
       
       const clipTime = timelineStore.currentTime - audioClip.startTime + audioClip.inPoint
       

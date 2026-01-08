@@ -87,8 +87,8 @@ export const FLASH_FRAGMENT_SHADER = `
     vec4 texColor = texture2D(u_texture, v_texCoord);
     vec3 flashColor = u_color;
     
-    // 线性混合
-    vec3 result = mix(texColor.rgb, flashColor, u_intensity);
+    // 线性混合 (基于 Alpha 遮罩)
+    vec3 result = mix(texColor.rgb, flashColor, u_intensity * texColor.a);
     
     gl_FragColor = vec4(result, texColor.a);
   }
@@ -161,16 +161,20 @@ export const GLITCH_FRAGMENT_SHADER = `
     float b = texture2D(u_texture, vec2(uv.x - splitAmount + blockOffset, uv.y)).b;
     
     vec3 color = vec3(r, g, b);
+    float alpha = texture2D(u_texture, uv).a; // 获取原始 Alpha
     
-    // 扫描线
+    // 扫描线 (应用 Alpha 遮罩)
     float scanline = sin(uv.y * u_resolution.y * 2.0) * 0.5 + 0.5;
-    color -= scanline * u_scanlineIntensity * 0.1 * u_intensity;
+    color -= scanline * u_scanlineIntensity * 0.1 * u_intensity * alpha;
     
-    // 随机噪点
+    // 随机噪点 (应用 Alpha 遮罩)
     float grainNoise = random(uv + fract(time)) * 0.1 * u_intensity;
-    color += grainNoise - 0.05 * u_intensity;
+    color += (grainNoise - 0.05 * u_intensity) * alpha;
     
-    gl_FragColor = vec4(color, 1.0);
+    // [修复] 强制应用 Alpha 遮罩，防止偏移采样导致内容溢出到透明区域
+    color *= alpha;
+
+    gl_FragColor = vec4(color, alpha);
   }
 `
 
@@ -284,9 +288,9 @@ export const INVERT_FRAGMENT_SHADER = `
   void main() {
     vec4 color = texture2D(u_texture, v_texCoord);
     
-    // 反转并混合
+    // 反转并混合 (基于 Alpha 遮罩)
     vec3 inverted = 1.0 - color.rgb;
-    vec3 result = mix(color.rgb, inverted, u_intensity);
+    vec3 result = mix(color.rgb, inverted, u_intensity * color.a);
     
     gl_FragColor = vec4(result, color.a);
   }
@@ -318,15 +322,15 @@ export const FILM_GRAIN_FRAGMENT_SHADER = `
     vec4 color = texture2D(u_texture, uv);
     vec3 rgb = color.rgb;
     
-    // 噪点
+    // 噪点 (应用 Alpha 遮罩)
     float grain = random(uv + fract(u_time * 100.0)) * 2.0 - 1.0;
-    rgb += grain * u_grainIntensity * 0.2;
+    rgb += grain * u_grainIntensity * 0.2 * color.a;
     
     // 划痕（垂直随机线条）
     float scratchX = random(vec2(floor(u_time * 5.0), 0.0));
     float scratch = step(0.99 - u_scratchIntensity * 0.02, abs(uv.x - scratchX));
     scratch *= random(vec2(uv.y, u_time)) * 0.3;
-    rgb += scratch;
+    rgb += scratch * color.a;
     
     // 闪烁
     float flicker = 1.0 - u_flickerIntensity * 0.1 * random(vec2(floor(u_time * 24.0), 0.0));
@@ -400,7 +404,7 @@ export const SPLIT_SCREEN_FRAGMENT_SHADER = `
       // 间隙检测
       float edge = fract(uv.x / segment) * segment;
       if (edge < gapNorm * 0.5 || edge > segment - gapNorm * 0.5) {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0); // 透明间隙以支持遮罩
         return;
       }
     } else if (u_direction == 1) {
@@ -411,7 +415,7 @@ export const SPLIT_SCREEN_FRAGMENT_SHADER = `
       
       float edge = fract(uv.y / segment) * segment;
       if (edge < gapNorm * 0.5 || edge > segment - gapNorm * 0.5) {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0); // 透明间隙以支持遮罩
         return;
       }
     } else {

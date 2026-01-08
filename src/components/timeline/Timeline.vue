@@ -238,6 +238,15 @@ function selectClip(clip: Clip) {
   timelineStore.selectClip(clip.id)
 }
 
+// 取消所有选中
+function deselectAll(e: MouseEvent) {
+  // 如果点击的是特定可交互元素（如按钮、手柄），忽略
+  const target = e.target as HTMLElement
+  if (target.closest('button') || target.closest('.trim-handle')) return
+  
+  timelineStore.selectClip(null)
+}
+
 // ==================== 裁剪功能 ====================
 
 // 开始裁剪拖拽
@@ -543,6 +552,7 @@ onUnmounted(() => {
       <div 
         class="track-content"
         ref="timelineRef"
+        @click="deselectAll"
       >
         <div 
           class="tracks-scroll-content"
@@ -586,7 +596,7 @@ onUnmounted(() => {
                 width: `${clip.duration * pixelsPerSecond}px`,
                 background: getTrackColor(track.type)
               }"
-              @click="selectClip(clip)"
+              @click.stop="selectClip(clip)"
               @mousedown="startClipDrag($event, clip, track)"
             >
               <!-- 帧预览（仅视频轨道） -->

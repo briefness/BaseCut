@@ -176,15 +176,16 @@ export class WebCodecsExporter {
     webglCanvas.width = width
     webglCanvas.height = height
     // [修复] 使用不初始化 EffectManager 的版本，避免破坏全局状态
-    this.renderer = new WebGLRenderer(webglCanvas, { skipEffectManagerInit: true })
-    
     // [新增] 创建独立的 EffectManager 用于导出
     this.exportEffectManager = new EffectManager()
-    const renderContext = this.renderer.getRenderContext()
-    if (renderContext) {
-      this.exportEffectManager.init(renderContext)
-      console.log('[WebCodecsExporter] 特效管理器已初始化')
-    }
+    
+    // [修复] 使用依赖注入，将 EffectManager 传递给 Renderer
+    // Renderer 会自动初始化它，并确保所有内部调用 (如 renderFrameWithEffects) 都使用这个实例
+    // [关键] 开启 preserveDrawingBuffer 以确保 drawImage 能抓取到 WebGL 内容
+    this.renderer = new WebGLRenderer(webglCanvas, { 
+      effectManager: this.exportEffectManager,
+      preserveDrawingBuffer: true
+    })
 
     // 2. 创建合成画布（用于字幕叠加和最终输出）
     const canvas = document.createElement('canvas')
@@ -359,25 +360,14 @@ export class WebCodecsExporter {
           activeClip.videoElement.currentTime = clipTime
           await this.waitForSeek(activeClip.videoElement)
           
-          // [修复] 应用特效渲染
-          const effects = activeClip.effects || []
-          if (effects.length > 0 && this.exportEffectManager) {
-            // 先渲染基础帧到纹理
-            this.renderer.renderFrame(activeClip.videoElement)
-            // 使用公共方法获取纹理
-            const texture = this.renderer.getTexture()
-            if (texture) {
-              // 应用特效链
-              this.exportEffectManager.applyEffects(texture, effects, clipTime, timelineTime)
-              // 添加调试日志（只在第一帧输出）
-              if (frameIndex === 0) {
-                console.log(`[WebCodecsExporter] 应用特效: 共 ${effects.length} 个`, effects.map(e => e.type))
-              }
-            }
-          } else {
-            // 无特效，直接渲染
-            this.renderer.renderFrame(activeClip.videoElement)
-          }
+          // [修复] 使用统一渲染管线 (自动处理 FBO/Aspect Ratio/黑边)
+          // 这确保了导出时的特效渲染与预览完全一致，且不会出现拉伸
+          this.renderer.renderFrameWithEffects(
+            activeClip.videoElement,
+            activeClip.effects || [],
+            clipTime,
+            timelineTime
+          )
         } else if (this.renderer) {
            // 黑屏 (WebGL渲染器负责清空)
            this.renderer.clear()
@@ -445,6 +435,12 @@ export class WebCodecsExporter {
 
     if (this.progressCallback) {
       this.progressCallback(1)
+    }
+
+    // 清理资源
+    if (this.exportEffectManager) {
+      this.exportEffectManager.destroy()
+      this.exportEffectManager = null
     }
 
     return new Blob([buffer], { type: 'video/mp4' })
