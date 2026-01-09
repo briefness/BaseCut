@@ -31,6 +31,14 @@ onMounted(async () => {
 onUnmounted(() => {
   historyStore.destroyKeyboardShortcuts()
 })
+
+/**
+ * 重新加载页面
+ * 独立为方法以解决模板中 window 对象不可访问的类型问题
+ */
+function reloadPage(): void {
+  window.location.reload()
+}
 </script>
 
 <template>
@@ -49,7 +57,7 @@ onUnmounted(() => {
       <div class="error-content">
         <h2>初始化失败</h2>
         <p>{{ initError }}</p>
-        <button class="btn btn-primary" @click="location.reload()">
+        <button class="btn btn-primary" @click="reloadPage">
           重新加载
         </button>
       </div>

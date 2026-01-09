@@ -2,13 +2,13 @@
 
 <p align="center">
   <br>
-  <img src="https://img.shields.io/badge/Vue-3.0+-4FC08D?style=flat-square&logo=vue.js" alt="Vue">
-  <img src="https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat-square&logo=typescript" alt="TypeScript">
+  <img src="https://img.shields.io/badge/Vue-3.5+-4FC08D?style=flat-square&logo=vue.js" alt="Vue">
+  <img src="https://img.shields.io/badge/TypeScript-5.7+-3178C6?style=flat-square&logo=typescript" alt="TypeScript">
   <img src="https://img.shields.io/badge/Vite-6.0+-646CFF?style=flat-square&logo=vite" alt="Vite">
   <img src="https://img.shields.io/badge/WebGL-2.0-990000?style=flat-square&logo=webgl" alt="WebGL">
   <img src="https://img.shields.io/badge/WebCodecs-Enabled-FF6B6B?style=flat-square" alt="WebCodecs">
   <br>
-  <sub>基于 WebGL 与 WebCodecs 的下一代云端视频剪辑解决方案</sub>
+  <sub>基于 WebGL 与 WebCodecs 的下一代云端视频剪辑解决方案（听听得了，拿来玩玩还是可以的）</sub>
 </p>
 
 ---
@@ -17,12 +17,12 @@
 
 ### 🚀 工业级播放引擎
 - **MediaController 架构**：自研多媒体控制器，精确协调视频、音频与字幕同步。
-- **VideoPool 预加载技术**：基于 LRU 策略的 6 通道视频池，实现多轨道素材零延迟切换。
+- **VideoPool 预加载技术**：基于 LRU (O(1)) 策略的视频池，实现多轨道素材零延迟切换与智能预热。
 - **PlaybackClock 精确计时**：独立于 UI 线程的高精度时钟，消除 `requestAnimationFrame` 带来的累积误差。
 - **智能渲染循环**：分离渲染帧率与状态更新频率（20fps UI / 60fps Render），彻底解决 Vue 响应式导致的性能瓶颈。
 
 ### 🎨 专业级渲染能力
-- **WebGL 硬件加速**：全流程 GPU 图像处理，支持实时滤镜与特效。
+- **模块化 WebGL 渲染器**：重构为多模块架构（`WebGLContext`、`AnimatedRenderer`、`OverlayRenderer`、`TransitionRenderer`），全流程 GPU 图像处理。
 - **10+ 视频特效**：闪白、故障、老电影、径向模糊、色差、像素化、暗角、分屏等。
 - **Ping-Pong 渲染**：多特效链式叠加，状态隔离确保渲染一致性。
 - **多层级合成系统**：支持视频、图片、文字、贴纸等多轨道混合渲染。
@@ -36,7 +36,7 @@
 ### ☁️ 云原生工作流
 - **HLS 流媒体支持**：原生支持 m3u8 流媒体播放，无缝对接云端转码资源。
 - **Sprite 缩略图引擎**：支持长视频雪碧图预览，拖拽时间轴实时响应，零卡顿体验。
-- **波形可视化**：异步加载音频波形数据，提供精准的音频编辑辅助。
+- **波形可视化**：异步加载音频波形数据，分段式 Canvas 渲染，提供精准的音频编辑辅助。
 
 ### ⏪ 企业级撤销/重做系统
 - **命令模式架构**：所有编辑操作封装为可逆命令，支持无限撤销/重做。
@@ -53,39 +53,77 @@
 ```
 vue-baseCut/
 ├── src/
-│   ├── engine/                  # 核心播放与渲染引擎
-│   │   ├── MediaController.ts   # 多媒体总线控制（核心）
-│   │   ├── VideoPool.ts         # 视频元素复用池（LRU O(1) 优化）
-│   │   ├── PlaybackClock.ts     # 高精度播放时钟
-│   │   ├── WebGLRenderer.ts     # WebGL 渲染器（滤镜/特效/转场）
-│   │   ├── EffectManager.ts     # 特效管理器（Ping-Pong 渲染）
-│   │   ├── EffectShaders.ts     # GLSL 特效着色器集合
-│   │   ├── AnimationEngine.ts   # 关键帧动画引擎
-│   │   ├── HistoryManager.ts    # 撤销/重做核心引擎
-│   │   ├── WebCodecsExporter.ts # WebCodecs 视频导出
-│   │   ├── HLSPlayer.ts         # HLS 流播放封装
-│   │   ├── FFmpegCore.ts        # WASM 媒体处理核心
-│   │   └── commands/            # 历史命令类
+│   ├── engine/                    # 核心播放与渲染引擎
+│   │   ├── MediaController.ts     # 多媒体总线控制（核心）
+│   │   ├── VideoPool.ts           # 视频元素复用池（LRU O(1) + 智能预热）
+│   │   ├── PlaybackClock.ts       # 高精度播放时钟
+│   │   ├── WebGLRenderer.ts       # WebGL 主渲染器
+│   │   ├── EffectManager.ts       # 特效管理器（Ping-Pong 渲染）
+│   │   ├── EffectShaders.ts       # GLSL 特效着色器集合
+│   │   ├── AnimationEngine.ts     # 关键帧动画引擎
+│   │   ├── HistoryManager.ts      # 撤销/重做核心引擎
+│   │   ├── HistoryTypes.ts        # 历史记录类型定义
+│   │   ├── WebCodecsExporter.ts   # WebCodecs 视频导出
+│   │   ├── VideoDecoder.ts        # 视频解码器
+│   │   ├── WorkerManager.ts       # Web Worker 管理
+│   │   ├── HLSPlayer.ts           # HLS 流播放封装
+│   │   ├── FFmpegCore.ts          # WASM 媒体处理核心
+│   │   ├── renderers/             # 模块化渲染器
+│   │   │   ├── WebGLContext.ts    # WebGL 上下文与状态管理
+│   │   │   ├── AnimatedRenderer.ts # 动画渲染器
+│   │   │   ├── OverlayRenderer.ts  # 叠加层渲染器
+│   │   │   └── TransitionRenderer.ts # 转场渲染器
+│   │   ├── shaders/               # GLSL 着色器
+│   │   └── commands/              # 历史命令类
 │   │       ├── TimelineCommands.ts
 │   │       ├── EffectCommands.ts
 │   │       ├── AnimationCommands.ts
 │   │       └── ProjectCommands.ts
 │   │
-│   ├── components/              # UI 组件库
-│   │   ├── player/              # 播放器模块
-│   │   ├── timeline/            # 时间轴模块
-│   │   ├── effect/              # 特效面板
-│   │   └── export/              # 导出对话框
+│   ├── components/                # UI 组件库
+│   │   ├── player/                # 播放器模块
+│   │   ├── timeline/              # 时间轴模块
+│   │   ├── effect/                # 特效面板
+│   │   ├── animation/             # 动画面板
+│   │   ├── property/              # 属性面板
+│   │   ├── export/                # 导出对话框
+│   │   ├── upload/                # 上传组件
+│   │   └── layout/                # 布局组件
 │   │
-│   ├── stores/                  # 状态管理 (Pinia)
-│   │   ├── timeline.ts          # 时间轴状态（支持撤销）
-│   │   ├── effects.ts           # 特效状态（支持撤销）
-│   │   ├── animation.ts         # 动画状态（支持撤销）
-│   │   ├── history.ts           # 历史记录 Store
-│   │   └── project.ts           # 项目设置（支持撤销）
+│   ├── stores/                    # 状态管理 (Pinia)
+│   │   ├── timeline/              # 模块化时间轴状态
+│   │   │   ├── index.ts           # 主入口
+│   │   │   ├── state.ts           # 状态定义
+│   │   │   ├── clipOperations.ts  # 片段操作
+│   │   │   ├── trackOperations.ts # 轨道操作
+│   │   │   ├── transitionOperations.ts # 转场操作
+│   │   │   ├── playbackControl.ts # 播放控制
+│   │   │   └── utils.ts           # 工具函数
+│   │   ├── effects.ts             # 特效状态（支持撤销）
+│   │   ├── animation.ts           # 动画状态（支持撤销）
+│   │   ├── history.ts             # 历史记录 Store
+│   │   ├── project.ts             # 项目设置（支持撤销）
+│   │   └── resource.ts            # 资源管理
 │   │
-│   └── types/                   # TypeScript 类型定义
-│       └── effects.ts           # 特效类型定义
+│   ├── composables/               # Vue 组合式函数
+│   │   └── usePlayerWatchers.ts   # 播放器监听器
+│   │
+│   ├── utils/                     # 工具函数
+│   │   ├── FrameExtractor.ts      # 帧提取器
+│   │   ├── SpriteThumbnailer.ts   # 雪碧图缩略图
+│   │   ├── SubtitleRenderer.ts    # 字幕渲染器
+│   │   ├── TransitionRenderer.ts  # 转场渲染
+│   │   └── WaveformExtractor.ts   # 分段式波形提取器
+│   │
+│   ├── types/                     # TypeScript 类型定义
+│   │   ├── index.ts               # 核心类型
+│   │   ├── effects.ts             # 特效类型
+│   │   └── animation.ts           # 动画类型
+│   │
+│   └── db/                        # 本地数据库 (IndexedDB)
+│
+└── docs/
+    └── blog/                      # 技术博客文档
 ```
 
 ### 渲染流程
@@ -93,7 +131,7 @@ vue-baseCut/
 ```mermaid
 graph TD
     Clock[PlaybackClock] -->|Tick| MC[MediaController]
-    MC -->|Sync| VP[VideoPool]
+    MC -->|Sync| VP[VideoPool<br/>LRU O(1) + 智能预热]
     MC -->|Frame| Renderer[WebGLRenderer]
     Renderer -->|FBO| EM[EffectManager]
     EM -->|Ping-Pong| Effects[特效链]
@@ -121,6 +159,9 @@ pnpm dev
 
 # 3. 构建生产版本
 pnpm build
+
+# 4. 类型检查
+pnpm type-check
 ```
 
 ---
@@ -142,20 +183,35 @@ pnpm build
 
 ---
 
+## 🔧 主要依赖
+
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| Vue | ^3.5.13 | 前端框架 |
+| Pinia | ^2.2.8 | 状态管理 |
+| Vite | ^6.0.4 | 构建工具 |
+| TypeScript | ^5.7.2 | 类型系统 |
+| hls.js | ^1.6.15 | HLS 流媒体播放 |
+| @ffmpeg/ffmpeg | ^0.12.10 | WASM 媒体处理 |
+| leafer-ui | ^1.12.2 | 贴纸/画布渲染 |
+| idb | ^8.0.1 | IndexedDB 封装 |
+
+---
+
 ## 📚 技术博客
 
 深入了解项目实现细节：
 
-1. [技术选型与项目结构](./docs/blog/01-architecture.md)
-2. [时间轴数据模型](./docs/blog/02-timeline-state.md)
-3. [WebGL 渲染与滤镜](./docs/blog/03-webgl-rendering.md)
-4. [转场动画实现](./docs/blog/04-transitions.md)
-5. [WebCodecs 视频导出](./docs/blog/05-webcodecs-export.md)
-6. [LeaferJS 贴纸系统](./docs/blog/06-leaferjs-sticker.md)
-7. [视频特效系统](./docs/blog/07-effect-system.md)
-8. [关键帧动画系统](./docs/blog/08-keyframe-animation.md)
-9. [性能优化](./docs/blog/09-performance-optimization.md)
-10. [撤销/重做系统](./docs/blog/10-undo-redo.md)
+1. [技术选型与项目结构](https://blog.csdn.net/mnhn456/article/details/156680879?spm=1011.2415.3001.5331)
+2. [时间轴数据模型](https://blog.csdn.net/mnhn456/article/details/156686794?spm=1011.2415.3001.5331)
+3. [WebGL 渲染与滤镜](https://blog.csdn.net/mnhn456/article/details/156686909?spm=1011.2415.3001.5331)
+4. [转场动画实现](https://blog.csdn.net/mnhn456/article/details/156687008?spm=1011.2415.3001.5331)
+5. [WebCodecs 视频导出](https://blog.csdn.net/mnhn456/article/details/156687082?spm=1011.2415.3001.5331)
+6. [LeaferJS 贴纸系统](https://blog.csdn.net/mnhn456/article/details/156687144?spm=1011.2415.3001.5331)
+7. [视频特效系统](https://blog.csdn.net/mnhn456/article/details/156722034?spm=1011.2415.3001.5331)
+8. [关键帧动画系统](https://blog.csdn.net/mnhn456/article/details/156726352?spm=1011.2415.3001.5331)
+9. [性能优化](https://blog.csdn.net/mnhn456/article/details/156730622?spm=1011.2415.3001.5331)
+10. [撤销/重做系统](https://blog.csdn.net/mnhn456/article/details/156764409?spm=1011.2415.3001.5331)
 
 ---
 
@@ -168,11 +224,11 @@ pnpm build
 - [x] **v0.5.0**: WebCodecs 硬件加速导出
 - [x] **v0.6.0**: 关键帧动画系统
 - [x] **v0.7.0**: 撤销/重做系统（命令模式，全 Store 覆盖）
-- [ ] **v0.8.0**: 音频特效与可视化
+- [x] **v0.8.0**: 模块化重构（WebGLRenderer、Timeline Store、VideoPool LRU O(1)）
+- [ ] **v0.9.0**: 音频特效与可视化增强
 
 ---
 
 <p align="center">
   <sub>Designed for Performance, Built for Creators.</sub>
 </p>
-

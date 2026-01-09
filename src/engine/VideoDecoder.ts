@@ -45,7 +45,8 @@ export class VideoDecoderEngine {
         codedHeight: config.codedHeight,
         hardwareAcceleration: config.hardwareAcceleration ?? 'prefer-hardware'
       })
-      return result.supported
+      // 空值合并：supported 可能为 undefined
+      return result.supported ?? false
     } catch {
       return false
     }

@@ -3,7 +3,7 @@
  * 负责在 Canvas 上渲染字幕，支持样式、位置和动画
  */
 
-import type { Subtitle, SubtitleStyle, SubtitlePosition, SubtitleAnimation } from '@/types'
+import type { Subtitle, SubtitleStyle, SubtitleAnimation } from '@/types'
 
 export interface RenderContext {
   ctx: CanvasRenderingContext2D
