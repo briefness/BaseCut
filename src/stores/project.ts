@@ -1,12 +1,20 @@
 /**
  * 项目 Store
  * 管理项目设置和持久化
+ * 
+ * 所有修改操作通过命令模式实现撤销/重做
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Project, DBProject } from '@/types'
 import { dbManager } from '@/db/IndexedDBManager'
 import { useTimelineStore } from './timeline'
+import { useHistoryStore } from './history'
+import {
+  SetCanvasSizeCommand,
+  SetFrameRateCommand,
+  RenameProjectCommand
+} from '@/engine/commands'
 
 export const useProjectStore = defineStore('project', () => {
   // ==================== 状态 ====================
@@ -135,14 +143,57 @@ export const useProjectStore = defineStore('project', () => {
       createNew()
     }
   }
-
+  // ==================== 直接方法（供命令调用） ====================
+  
   /**
-   * 设置画布尺寸
+   * 直接设置画布尺寸（内部方法）
    */
-  function setCanvasSize(width: number, height: number): void {
+  function _setCanvasSizeDirect(width: number, height: number): void {
     canvasWidth.value = width
     canvasHeight.value = height
     isDirty.value = true
+  }
+  
+  /**
+   * 直接设置帧率（内部方法）
+   */
+  function _setFrameRateDirect(rate: number): void {
+    frameRate.value = rate
+    isDirty.value = true
+  }
+  
+  /**
+   * 直接重命名项目（内部方法）
+   */
+  function _renameDirect(name: string): void {
+    projectName.value = name
+    isDirty.value = true
+  }
+
+  // ==================== 获取 History Store ====================
+  
+  /**
+   * 惰性获取 History Store
+   */
+  function getHistoryStore() {
+    return useHistoryStore()
+  }
+  
+  /**
+   * 获取当前 Store 实例
+   */
+  function getThisStore() {
+    return useProjectStore()
+  }
+  
+  // ==================== 公共方法（记录历史） ====================
+  
+  /**
+   * 设置画布尺寸（记录历史）
+   */
+  function setCanvasSize(width: number, height: number): void {
+    const command = new SetCanvasSizeCommand(getThisStore, width, height)
+    getHistoryStore().execute(command)
   }
 
   /**
@@ -156,19 +207,19 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
-   * 设置帧率
+   * 设置帧率（记录历史）
    */
   function setFrameRate(rate: number): void {
-    frameRate.value = rate
-    isDirty.value = true
+    const command = new SetFrameRateCommand(getThisStore, rate)
+    getHistoryStore().execute(command)
   }
 
   /**
-   * 修改项目名称
+   * 修改项目名称（记录历史）
    */
   function rename(name: string): void {
-    projectName.value = name
-    isDirty.value = true
+    const command = new RenameProjectCommand(getThisStore, name)
+    getHistoryStore().execute(command)
   }
 
   /**
@@ -200,6 +251,10 @@ export const useProjectStore = defineStore('project', () => {
     applyPreset,
     setFrameRate,
     rename,
-    markDirty
+    markDirty,
+    // 内部直接方法（供命令调用）
+    _setCanvasSizeDirect,
+    _setFrameRateDirect,
+    _renameDirect
   }
 })

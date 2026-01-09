@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import MainLayout from './components/layout/MainLayout.vue'
 import { useResourceStore } from './stores/resource'
 import { useProjectStore } from './stores/project'
+import { useHistoryStore } from './stores/history'
 
 const resourceStore = useResourceStore()
 const projectStore = useProjectStore()
+const historyStore = useHistoryStore()
 
 const isInitialized = ref(false)
 const initError = ref<string | null>(null)
@@ -16,11 +18,18 @@ onMounted(async () => {
     await resourceStore.init()
     // 创建新项目
     projectStore.createNew()
+    // 初始化撤销/重做快捷键
+    historyStore.initKeyboardShortcuts()
     isInitialized.value = true
   } catch (error) {
     console.error('初始化失败:', error)
     initError.value = String(error)
   }
+})
+
+// 组件卸载时清理快捷键监听
+onUnmounted(() => {
+  historyStore.destroyKeyboardShortcuts()
 })
 </script>
 

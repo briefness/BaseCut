@@ -3,6 +3,8 @@
  * 
  * 使用 Pinia 管理关键帧动画的状态
  * 提供添加、删除、更新关键帧的操作
+ * 
+ * 所有修改操作通过命令模式实现撤销/重做
  */
 
 import { defineStore } from 'pinia'
@@ -13,8 +15,7 @@ import type {
   Keyframe,
   AnimatableProperty,
   CreateKeyframeParams,
-  UpdateKeyframeParams,
-  EasingConfig
+  UpdateKeyframeParams
 } from '@/types/animation'
 import {
   generateKeyframeId,
@@ -22,6 +23,12 @@ import {
   sortKeyframes,
   createDefaultEasing
 } from '@/engine/AnimationEngine'
+import { useHistoryStore } from './history'
+import {
+  AddKeyframeCommand,
+  RemoveKeyframeCommand,
+  UpdateKeyframeCommand
+} from '@/engine/commands'
 
 export const useAnimationStore = defineStore('animation', () => {
   // ==================== 状态 ====================
@@ -77,7 +84,6 @@ export const useAnimationStore = defineStore('animation', () => {
         .map(t => t.property)
     }
   })
-  
   // ==================== Actions ====================
   
   /**
@@ -113,21 +119,17 @@ export const useAnimationStore = defineStore('animation', () => {
     return track
   }
   
+  // ==================== 直接方法（供命令调用） ====================
+  
   /**
-   * 添加关键帧
-   * @param clipId 片段 ID
-   * @param property 属性名
-   * @param params 关键帧参数
-   * @returns 新创建的关键帧
+   * 直接添加关键帧（内部方法）
    */
-  function addKeyframe(
+  function _addKeyframeDirect(
     clipId: string,
     property: AnimatableProperty,
     params: CreateKeyframeParams
   ): Keyframe {
     const track = ensureTrack(clipId, property)
-    
-    // 检查是否已有相同时间的关键帧
     const existingIndex = track.keyframes.findIndex(k => Math.abs(k.time - params.time) < 0.001)
     
     const keyframe: Keyframe = {
@@ -138,25 +140,19 @@ export const useAnimationStore = defineStore('animation', () => {
     }
     
     if (existingIndex >= 0) {
-      // 替换现有关键帧
       track.keyframes[existingIndex] = keyframe
     } else {
-      // 添加新关键帧
       track.keyframes.push(keyframe)
     }
     
-    // 排序
     track.keyframes = sortKeyframes(track.keyframes)
-    
-    console.log(`[AnimationStore] 添加关键帧: clipId=${clipId}, property=${property}, time=${params.time}, value=${params.value}`)
-    
     return keyframe
   }
   
   /**
-   * 删除关键帧
+   * 直接删除关键帧（内部方法）
    */
-  function removeKeyframe(
+  function _removeKeyframeDirect(
     clipId: string,
     property: AnimatableProperty,
     keyframeId: string
@@ -171,22 +167,13 @@ export const useAnimationStore = defineStore('animation', () => {
     if (index < 0) return false
     
     track.keyframes.splice(index, 1)
-    
-    console.log(`[AnimationStore] 删除关键帧: clipId=${clipId}, property=${property}, keyframeId=${keyframeId}`)
-    
-    // 如果轨道没有关键帧了，可以选择删除轨道（可选）
-    // if (track.keyframes.length === 0) {
-    //   const trackIndex = animation.tracks.indexOf(track)
-    //   animation.tracks.splice(trackIndex, 1)
-    // }
-    
     return true
   }
   
   /**
-   * 更新关键帧
+   * 直接更新关键帧（内部方法）
    */
-  function updateKeyframe(
+  function _updateKeyframeDirect(
     clipId: string,
     property: AnimatableProperty,
     keyframeId: string,
@@ -201,16 +188,74 @@ export const useAnimationStore = defineStore('animation', () => {
     const keyframe = track.keyframes.find(k => k.id === keyframeId)
     if (!keyframe) return false
     
-    // 更新属性
     if (updates.time !== undefined) keyframe.time = updates.time
     if (updates.value !== undefined) keyframe.value = updates.value
     if (updates.easing !== undefined) keyframe.easing = updates.easing
     
-    // 如果时间变了，需要重新排序
     if (updates.time !== undefined) {
       track.keyframes = sortKeyframes(track.keyframes)
     }
     
+    return true
+  }
+  
+  // ==================== 获取 History Store ====================
+  
+  /**
+   * 惰性获取 History Store
+   */
+  function getHistoryStore() {
+    return useHistoryStore()
+  }
+  
+  /**
+   * 获取当前 Store 实例
+   */
+  function getThisStore() {
+    return useAnimationStore()
+  }
+  
+  // ==================== 公共方法（记录历史） ====================
+  
+  /**
+   * 添加关键帧（记录历史）
+   */
+  function addKeyframe(
+    clipId: string,
+    property: AnimatableProperty,
+    params: CreateKeyframeParams
+  ): Keyframe {
+    const command = new AddKeyframeCommand(getThisStore, clipId, property, params)
+    getHistoryStore().execute(command)
+    // 返回新创建的关键帧
+    const track = getTrack.value(clipId, property)
+    return track!.keyframes[track!.keyframes.length - 1]
+  }
+  
+  /**
+   * 删除关键帧（记录历史）
+   */
+  function removeKeyframe(
+    clipId: string,
+    property: AnimatableProperty,
+    keyframeId: string
+  ): boolean {
+    const command = new RemoveKeyframeCommand(getThisStore, clipId, property, keyframeId)
+    getHistoryStore().execute(command)
+    return true
+  }
+  
+  /**
+   * 更新关键帧（记录历史）
+   */
+  function updateKeyframe(
+    clipId: string,
+    property: AnimatableProperty,
+    keyframeId: string,
+    updates: UpdateKeyframeParams
+  ): boolean {
+    const command = new UpdateKeyframeCommand(getThisStore, clipId, property, keyframeId, updates)
+    getHistoryStore().execute(command)
     return true
   }
   
@@ -315,6 +360,10 @@ export const useAnimationStore = defineStore('animation', () => {
     copyAnimation,
     clearAll,
     exportAnimations,
-    importAnimations
+    importAnimations,
+    // 内部直接方法（供命令调用）
+    _addKeyframeDirect,
+    _removeKeyframeDirect,
+    _updateKeyframeDirect
   }
 })

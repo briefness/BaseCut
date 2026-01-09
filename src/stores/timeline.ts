@@ -1,10 +1,26 @@
 /**
  * 时间线 Store
  * 管理轨道、片段和播放状态
+ * 
+ * 所有修改操作通过命令模式实现撤销/重做
+ * 公共方法自动包装为历史命令
+ * _xxDirect 方法为内部直接操作，不记录历史
  */
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Track, Clip, TrackType, PlaybackState, Transition, TransitionType } from '@/types'
+import { useHistoryStore } from './history'
+import {
+  AddClipCommand,
+  RemoveClipCommand,
+  UpdateClipCommand,
+  MoveClipCommand,
+  SplitClipCommand,
+  AddTrackCommand,
+  RemoveTrackCommand,
+  ToggleTrackMuteCommand,
+  ToggleTrackLockCommand
+} from '@/engine/commands'
 
 export const useTimelineStore = defineStore('timeline', () => {
   // ==================== 状态 ====================
@@ -61,12 +77,28 @@ export const useTimelineStore = defineStore('timeline', () => {
     playbackRate: playbackRate.value
   }))
 
-  // ==================== 轨道操作 ====================
+  // ==================== 获取 History Store ====================
+  
+  /**
+   * 惰性获取 History Store（避免循环依赖）
+   */
+  function getHistoryStore() {
+    return useHistoryStore()
+  }
+  
+  /**
+   * 获取当前 Store 实例（供命令使用）
+   */
+  function getThisStore() {
+    return useTimelineStore()
+  }
+
+  // ==================== 轨道操作（直接方法，不记录历史） ====================
 
   /**
-   * 添加轨道
+   * 直接添加轨道（内部方法，不记录历史）
    */
-  function addTrack(type: TrackType, name?: string): Track {
+  function _addTrackDirect(type: TrackType, name?: string): Track {
     const track: Track = {
       id: crypto.randomUUID(),
       type,
@@ -88,11 +120,21 @@ export const useTimelineStore = defineStore('timeline', () => {
 
     return track
   }
+  
+  /**
+   * 添加轨道（记录历史）
+   */
+  function addTrack(type: TrackType, name?: string): Track {
+    const command = new AddTrackCommand(getThisStore, type, name)
+    getHistoryStore().execute(command)
+    // 返回创建的轨道
+    return tracks.value.find(t => t.type === type && (!name || t.name === name))!
+  }
 
   /**
-   * 删除轨道
+   * 直接删除轨道（内部方法，不记录历史）
    */
-  function removeTrack(trackId: string): void {
+  function _removeTrackDirect(trackId: string): void {
     const index = tracks.value.findIndex(t => t.id === trackId)
     if (index !== -1) {
       // 取消选中该轨道上的片段
@@ -103,25 +145,64 @@ export const useTimelineStore = defineStore('timeline', () => {
       tracks.value.splice(index, 1)
     }
   }
+  
+  /**
+   * 恢复轨道（用于撤销删除）
+   */
+  function _restoreTrackDirect(track: Track): void {
+    // 按类型排序插入
+    const typeOrder: Record<string, number> = { video: 0, sticker: 1, text: 2, audio: 3 }
+    const insertIndex = tracks.value.findIndex(t => typeOrder[t.type] > typeOrder[track.type])
+    
+    if (insertIndex === -1) {
+      tracks.value.push(track)
+    } else {
+      tracks.value.splice(insertIndex, 0, track)
+    }
+  }
+  
+  /**
+   * 删除轨道（记录历史）
+   */
+  function removeTrack(trackId: string): void {
+    const command = new RemoveTrackCommand(getThisStore, trackId)
+    getHistoryStore().execute(command)
+  }
 
   /**
-   * 切换轨道静音
+   * 直接切换轨道静音（内部方法）
    */
-  function toggleTrackMute(trackId: string): void {
+  function _toggleTrackMuteDirect(trackId: string): void {
     const track = tracks.value.find(t => t.id === trackId)
     if (track) {
       track.muted = !track.muted
     }
   }
-
+  
   /**
-   * 切换轨道锁定
+   * 切换轨道静音（记录历史）
    */
-  function toggleTrackLock(trackId: string): void {
+  function toggleTrackMute(trackId: string): void {
+    const command = new ToggleTrackMuteCommand(getThisStore, trackId)
+    getHistoryStore().execute(command)
+  }
+  
+  /**
+   * 直接切换轨道锁定（内部方法）
+   */
+  function _toggleTrackLockDirect(trackId: string): void {
     const track = tracks.value.find(t => t.id === trackId)
     if (track) {
       track.locked = !track.locked
     }
+  }
+
+  /**
+   * 切换轨道锁定（记录历史）
+   */
+  function toggleTrackLock(trackId: string): void {
+    const command = new ToggleTrackLockCommand(getThisStore, trackId)
+    getHistoryStore().execute(command)
   }
 
   // ==================== 片段操作 ====================
@@ -174,11 +255,19 @@ export const useTimelineStore = defineStore('timeline', () => {
   }
 
   /**
-   * 添加片段（自动防重叠）
+   * 直接添加片段（内部方法，用于命令执行和撤销恢复）
    */
-  function addClip(trackId: string, clip: Omit<Clip, 'id' | 'trackId'>): Clip {
+  function _addClipDirect(trackId: string, clip: Omit<Clip, 'id' | 'trackId'> | Clip): Clip {
     const track = tracks.value.find(t => t.id === trackId)
     if (!track) throw new Error('轨道不存在')
+
+    // 如果是完整的 Clip（恢复场景），直接使用
+    if ('id' in clip && 'trackId' in clip) {
+      const fullClip = clip as Clip
+      track.clips.push({ ...fullClip, trackId })
+      updateDuration()
+      return fullClip
+    }
 
     // 计算不重叠的起始位置
     const adjustedStartTime = findNonOverlappingPosition(
@@ -195,17 +284,26 @@ export const useTimelineStore = defineStore('timeline', () => {
     }
 
     track.clips.push(newClip)
-    
-    // 更新总时长
     updateDuration()
 
     return newClip
   }
+  
+  /**
+   * 添加片段（记录历史）
+   */
+  function addClip(trackId: string, clip: Omit<Clip, 'id' | 'trackId'>): Clip {
+    const command = new AddClipCommand(getThisStore, trackId, clip)
+    getHistoryStore().execute(command)
+    // 返回最新添加的片段
+    const track = tracks.value.find(t => t.id === trackId)
+    return track!.clips[track!.clips.length - 1]
+  }
 
   /**
-   * 移除片段
+   * 直接移除片段（内部方法）
    */
-  function removeClip(clipId: string): void {
+  function _removeClipDirect(clipId: string): void {
     for (const track of tracks.value) {
       const index = track.clips.findIndex(c => c.id === clipId)
       if (index !== -1) {
@@ -218,56 +316,63 @@ export const useTimelineStore = defineStore('timeline', () => {
       }
     }
   }
+  
+  /**
+   * 移除片段（记录历史）
+   */
+  function removeClip(clipId: string): void {
+    const command = new RemoveClipCommand(getThisStore, clipId)
+    getHistoryStore().execute(command)
+  }
 
   /**
-   * 更新片段
+   * 直接更新片段（内部方法）
    */
-  function updateClip(clipId: string, updates: Partial<Clip>): void {
+  function _updateClipDirect(clipId: string, updates: Partial<Clip>): void {
     for (const track of tracks.value) {
       const clip = track.clips.find(c => c.id === clipId)
       if (clip) {
-        // [调试日志] 验证 transform 更新
-        if (updates.transform) {
-          console.log('[Timeline updateClip]', {
-            clipId,
-            'updates.transform': updates.transform,
-            'clip.transform before': clip.transform
-          })
-        }
-        
         Object.assign(clip, updates)
-        
-        if (updates.transform) {
-          console.log('[Timeline updateClip] after:', {
-            'clip.transform after': clip.transform
-          })
-        }
-        
         updateDuration()
         return
       }
     }
   }
+  
+  /**
+   * 更新片段（记录历史）
+   */
+  function updateClip(clipId: string, updates: Partial<Clip>): void {
+    const command = new UpdateClipCommand(getThisStore, clipId, updates)
+    getHistoryStore().execute(command)
+  }
 
   /**
-   * 移动片段到新时间位置（自动防重叠）
+   * 直接移动片段（内部方法）
    */
-  function moveClip(clipId: string, newStartTime: number): void {
-    // 找到片段所在的轨道
+  function _moveClipDirect(clipId: string, newStartTime: number): void {
     for (const track of tracks.value) {
       const clip = track.clips.find(c => c.id === clipId)
       if (clip) {
-        // 计算不重叠的位置
         const adjustedStartTime = findNonOverlappingPosition(
           track,
           Math.max(0, newStartTime),
           clip.duration,
-          clipId  // 排除自身
+          clipId
         )
-        updateClip(clipId, { startTime: adjustedStartTime })
+        clip.startTime = adjustedStartTime
+        updateDuration()
         return
       }
     }
+  }
+  
+  /**
+   * 移动片段到新时间位置（记录历史）
+   */
+  function moveClip(clipId: string, newStartTime: number): void {
+    const command = new MoveClipCommand(getThisStore, clipId, newStartTime)
+    getHistoryStore().execute(command)
   }
 
   /**
@@ -313,9 +418,9 @@ export const useTimelineStore = defineStore('timeline', () => {
   }
 
   /**
-   * 分割片段
+   * 直接分割片段（内部方法）
    */
-  function splitClip(clipId: string, splitTime: number): [Clip, Clip] | null {
+  function _splitClipDirect(clipId: string, splitTime: number): [Clip, Clip] | null {
     for (const track of tracks.value) {
       const clipIndex = track.clips.findIndex(c => c.id === clipId)
       if (clipIndex === -1) continue
@@ -323,21 +428,18 @@ export const useTimelineStore = defineStore('timeline', () => {
       const clip = track.clips[clipIndex]
       const clipEndTime = clip.startTime + clip.duration
 
-      // 检查分割点是否有效
       if (splitTime <= clip.startTime || splitTime >= clipEndTime) {
         return null
       }
 
-      const splitPoint = splitTime - clip.startTime // 相对于片段开始的时间
+      const splitPoint = splitTime - clip.startTime
 
-      // 创建前半部分
       const firstHalf: Clip = {
         ...clip,
         duration: splitPoint,
         outPoint: clip.inPoint + splitPoint
       }
 
-      // 创建后半部分
       const secondHalf: Clip = {
         ...clip,
         id: crypto.randomUUID(),
@@ -347,12 +449,30 @@ export const useTimelineStore = defineStore('timeline', () => {
         effects: [...clip.effects]
       }
 
-      // 替换原片段
       track.clips.splice(clipIndex, 1, firstHalf, secondHalf)
-
       return [firstHalf, secondHalf]
     }
 
+    return null
+  }
+  
+  /**
+   * 分割片段（记录历史）
+   */
+  function splitClip(clipId: string, splitTime: number): [Clip, Clip] | null {
+    const command = new SplitClipCommand(getThisStore, clipId, splitTime)
+    getHistoryStore().execute(command)
+    // 返回分割结果（需要从轨道中查找）
+    const clip = getClipById(clipId)
+    if (!clip) {
+      // 分割成功后原 clipId 被保留为 firstHalf，查找 secondHalf
+      for (const track of tracks.value) {
+        const idx = track.clips.findIndex(c => c.id === clipId)
+        if (idx !== -1 && idx + 1 < track.clips.length) {
+          return [track.clips[idx], track.clips[idx + 1]]
+        }
+      }
+    }
     return null
   }
 
@@ -665,6 +785,17 @@ export const useTimelineStore = defineStore('timeline', () => {
     setCurrentTime,
     reset,
     // 计算属性（辅助）
-    selectedClipIds
+    selectedClipIds,
+    // 内部直接方法（供命令调用，不记录历史）
+    _addTrackDirect,
+    _removeTrackDirect,
+    _restoreTrackDirect,
+    _toggleTrackMuteDirect,
+    _toggleTrackLockDirect,
+    _addClipDirect,
+    _removeClipDirect,
+    _updateClipDirect,
+    _moveClipDirect,
+    _splitClipDirect
   }
 })
