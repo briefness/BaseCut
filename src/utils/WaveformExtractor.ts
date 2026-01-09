@@ -129,35 +129,28 @@ class WaveformExtractor {
     
     // 计算采样参数
     const duration = audioBuffer.duration
-    const totalSamples = Math.ceil(duration * samplesPerSecond)
-    const samplesPerPeak = Math.floor(channelData.length / totalSamples)
+    const totalSamples = Math.ceil(duration * samplesPerSecond)  // 总峰值数
+    const samplesPerPeak = Math.floor(channelData.length / totalSamples)  // 每个峰值对应的采样点数
     
-    // ==================== 性能优化 ====================
-    // 1. 使用 Float32Array 预分配，避免动态 push 的内存分配开销
-    // 2. 使用位运算计算绝对值，避免函数调用开销
-    // 3. 减少循环内的变量声明和边界检查
+    // 预分配数组存储峰值
     const peaks = new Float32Array(totalSamples)
     const dataLength = channelData.length
     
     for (let i = 0; i < totalSamples; i++) {
       const start = i * samplesPerPeak
-      // 预计算循环边界，避免每次迭代都进行 Math.min 计算
       const end = start + samplesPerPeak < dataLength ? start + samplesPerPeak : dataLength
       
+      // 找当前时间窗口内的最大振幅
       let maxPeak = 0
       for (let j = start; j < end; j++) {
         const v = channelData[j]
-        // 避免 Math.abs 函数调用：手动计算绝对值
-        const abs = v < 0 ? -v : v
+        const abs = v < 0 ? -v : v  // 手动计算绝对值
         if (abs > maxPeak) maxPeak = abs
       }
       peaks[i] = maxPeak
     }
     
-    // 转换为普通数组以保持 API 兼容性
-    const result = Array.from(peaks)
-    
-    // 保存到缓存
+    const result = Array.from(peaks)  // 转换为普通数组
     this.saveToCache(materialId, samplesPerSecond, result, duration)
     
     return result

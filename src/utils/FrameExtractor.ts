@@ -270,11 +270,11 @@ class FrameExtractor {
       }
     }
     
-    // 性能优化：根据设备 CPU 核心数动态调整并发数
-    // 限制最大为 4 以避免浏览器内存压力，最小为 2 保证基本并行
+    // 根据 CPU 核心数调整并发数（最小 2，最大 4）
     const concurrency = Math.max(2, Math.min(4, navigator.hardwareConcurrency || 2))
     const results: string[] = []
     
+    // 分批并行提取
     for (let i = 0; i < times.length; i += concurrency) {
       const batch = times.slice(i, i + concurrency)
       const batchResults = await Promise.all(

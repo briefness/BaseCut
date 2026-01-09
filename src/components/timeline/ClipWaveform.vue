@@ -155,14 +155,12 @@ function drawWaveform() {
   // 设置颜色（使用当前主题色）
   ctx.fillStyle = 'rgba(255, 255, 255, 0.65)'
   
-  // ==================== 性能优化：批量路径构建 ====================
-  // 使用 Path2D 收集所有条形路径，最后一次性 fill
-  // 减少 Canvas 状态切换和绘制调用次数
+  // 使用 Path2D 批量构建所有条形路径，最后一次性 fill
   const path = new Path2D()
   const peaksLen = peaks.length
   
   for (let i = 0; i < numBars; i++) {
-    // 获取这个区间的峰值（取最大值）
+    // 获取这个区间的峰值
     const startIdx = Math.floor(i * peaksLen / numBars)
     const endIdx = Math.min(Math.floor((i + 1) * peaksLen / numBars), peaksLen)
     
@@ -172,18 +170,16 @@ function drawWaveform() {
       if (p > maxPeak) maxPeak = p
     }
     
-    // 计算条形高度
+    // 计算条形高度和位置
     const barHeight = Math.max(minBarHeight, maxPeak * maxBarHeight)
-    
-    // 从底部向上绘制
     const x = i * barSpacing
     const y = height - paddingBottom - barHeight
     
-    // 添加圆角矩形到路径
+    // 添加到路径
     path.roundRect(x, y, barWidth, barHeight, 1)
   }
   
-  // 一次性填充所有条形
+  // 一次性填充
   ctx.fill(path)
 }
 

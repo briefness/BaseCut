@@ -134,25 +134,24 @@ export function applyEasing(progress: number, config: EasingConfig): number {
 
 /**
  * 二分搜索找到最后一个 time <= 目标时间的关键帧索引
- * 性能优化：O(n) -> O(log n)，大量关键帧时提升显著
- * @param keyframes 已排序的关键帧数组
+ * @param keyframes 已排序的关键帧数组（必须按 time 升序）
  * @param time 目标时间
- * @returns 最后一个 time <= 目标时间的索引，如果所有关键帧都在目标时间之后返回 -1
+ * @returns 索引，找不到返回 -1
  */
 function binarySearchKeyframe(keyframes: Keyframe[], time: number): number {
   let lo = 0
   let hi = keyframes.length - 1
   
-  // 边界条件：所有关键帧都在目标时间之后
+  // 第一个关键帧都大于目标时间，无效
   if (keyframes[lo].time > time) return -1
   
   while (lo < hi) {
-    // 使用位运算避免浮点误差，(lo + hi + 1) >> 1 等价于 Math.floor((lo + hi + 1) / 2)
+    // +1 确保中点偏右，避免 lo 和 hi 相邻时死循环
     const mid = (lo + hi + 1) >> 1
     if (keyframes[mid].time <= time) {
-      lo = mid
+      lo = mid  // 答案在 [mid, hi]
     } else {
-      hi = mid - 1
+      hi = mid - 1  // 答案在 [lo, mid-1]
     }
   }
   

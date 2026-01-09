@@ -433,19 +433,26 @@ export class WebGLRenderer {
   private animatedProgram: WebGLProgram | null = null
   private animatedUniforms: Record<string, WebGLUniformLocation | null> = {}
 
-  // ==================== 性能优化：预分配静态缓冲区 ====================
-  // 避免每帧创建 Float32Array，减少 GC 压力，提升帧率 5-10%
-  private readonly staticPositions = new Float32Array(12)  // 6 顶点 * 2 坐标
-  private readonly staticTexCoords = new Float32Array(12)  // 6 顶点 * 2 UV
+  // ==================== 静态缓冲区 ====================
+  // 预分配的顶点和纹理坐标数组，渲染时直接修改内容而不重新创建
+  
+  // 6 个顶点的 2D 坐标（6 * 2 = 12 个浮点数）
+  private readonly staticPositions = new Float32Array(12)
+  
+  // 6 个顶点的 UV 纹理坐标
+  private readonly staticTexCoords = new Float32Array(12)
+  
   // FBO 专用纹理坐标（Y 轴不翻转）
   private readonly staticFboTexCoords = new Float32Array([
     0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1
   ])
-  // 全屏 Quad 顶点（常用，预先填充）
+  
+  // 全屏矩形顶点，覆盖 [-1, 1] × [-1, 1]
   private readonly fullscreenQuad = new Float32Array([
     -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1
   ])
-  // 标准纹理坐标（Y 翻转，视频用）
+  
+  // 标准视频纹理坐标（Y 轴翻转，因为视频原点在左上，WebGL 原点在左下）
   private readonly standardTexCoords = new Float32Array([
     0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0
   ])

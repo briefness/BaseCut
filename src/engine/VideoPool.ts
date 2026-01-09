@@ -1,44 +1,37 @@
 /**
  * VideoPool - 视频元素预加载池
- * 性能优化版本：使用 Map + 双向链表实现 O(1) LRU 淘汰
- * 
- * 设计原理：
- * - Map 保证 O(1) 查找
- * - 双向链表保证 O(1) 移动到头部、O(1) 删除尾部
- * - 头部是最近使用的，尾部是最久未使用的
+ * 使用 Map + 双向链表实现 O(1) LRU 淘汰
  */
 
-// ==================== LRU 双向链表节点 ====================
-
+// LRU 双向链表节点
 interface LRUNode {
-  key: string
-  video: PooledVideo
-  prev: LRUNode | null
-  next: LRUNode | null
+  key: string              // 素材 ID
+  video: PooledVideo       // 视频数据
+  prev: LRUNode | null     // 前驱指针
+  next: LRUNode | null     // 后继指针
 }
 
 export interface PooledVideo {
-  element: HTMLVideoElement
-  materialId: string
-  url: string
-  lastUsed: number  // 保留用于调试
-  ready: boolean
+  element: HTMLVideoElement   // Video DOM 元素
+  materialId: string          // 素材 ID
+  url: string                 // 视频 URL
+  lastUsed: number            // 最后使用时间戳
+  ready: boolean              // 是否加载完成
 }
 
 export class VideoPool {
-  private pool: Map<string, LRUNode> = new Map()
+  private pool: Map<string, LRUNode> = new Map()  // materialId -> 节点
   private maxSize: number
-  private pendingLoads: Map<string, Promise<HTMLVideoElement>> = new Map()
+  private pendingLoads: Map<string, Promise<HTMLVideoElement>> = new Map()  // 加载中的请求
   
-  // ==================== 双向链表头尾哨兵节点 ====================
-  // 使用哨兵节点简化边界处理，避免空指针判断
-  private head: LRUNode  // 最近使用
-  private tail: LRUNode  // 最久未使用
+  // 双向链表哨兵节点，简化边界处理
+  private head: LRUNode  // 头部 = 最近使用
+  private tail: LRUNode  // 尾部 = 最久未使用
   
   constructor(maxSize: number = 6) {
     this.maxSize = maxSize
     
-    // 初始化哨兵节点
+    // 初始化哨兵节点：HEAD <-> TAIL
     this.head = { key: '__HEAD__', video: null as any, prev: null, next: null }
     this.tail = { key: '__TAIL__', video: null as any, prev: null, next: null }
     this.head.next = this.tail

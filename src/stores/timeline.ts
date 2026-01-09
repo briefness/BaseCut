@@ -42,9 +42,7 @@ export const useTimelineStore = defineStore('timeline', () => {
     return clipIdMap.value.get(selectedClipId.value) ?? null
   })
 
-  // ==================== 性能优化：片段 ID 索引缓存 ====================
-  // 使用计算属性自动缓存，仅在 tracks 变化时重建
-  // 优化 getClipById 从 O(n*m) 到 O(1) 查找
+  // 片段 ID 索引缓存，仅在 tracks 变化时重建
   const clipIdMap = computed(() => {
     const map = new Map<string, Clip>()
     for (const track of tracks.value) {
