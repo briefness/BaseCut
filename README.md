@@ -131,7 +131,7 @@ vue-baseCut/
 ```mermaid
 graph TD
     Clock[PlaybackClock] -->|Tick| MC[MediaController]
-    MC -->|Sync| VP[VideoPool<br/>LRU O(1) + 智能预热]
+    MC -->|Sync| VP["VideoPool<br/>LRU O(1) + 智能预热"]
     MC -->|Frame| Renderer[WebGLRenderer]
     Renderer -->|FBO| EM[EffectManager]
     EM -->|Ping-Pong| Effects[特效链]
