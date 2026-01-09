@@ -735,8 +735,10 @@ export class WebGLRenderer {
       this.gl.clearColor(0, 0, 0, 0)
       this.gl.clear(this.gl.COLOR_BUFFER_BIT)
 
-      // 渲染源画面 (此时会绘制到 FBO 0)
-      this.renderFrame(source, cropMode)
+      // 渲染源画面到 FBO
+      // [关键] skipClear=true 跳过清屏，保留上面设置的透明背景
+      // 这样视频内容区域 Alpha=1，黑边区域 Alpha=0，特效只影响内容区域
+      this.renderFrame(source, cropMode, true)
 
       // 解绑 FBO，恢复到屏幕
       this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, null)
@@ -1001,10 +1003,20 @@ export class WebGLRenderer {
 
   /**
    * 渲染视频帧（支持多种显示模式）
+   * 
+   * [架构说明] 参考剪映/Premiere 等专业 NLE 软件的渲染管线设计：
+   * - 当渲染到屏幕时，使用不透明黑色背景（确保导出正确）
+   * - 当渲染到 FBO 供特效处理时，跳过清屏以保留透明 Alpha 通道
+   * 
    * @param source 视频/图片源
    * @param cropMode 显示模式：'contain' 保持比例有黑边，'cover' 居中裁剪，'fill' 拉伸
+   * @param skipClear 是否跳过清屏操作（FBO 模式下应为 true，由调用者预先清空）
    */
-  renderFrame(source: TexImageSource, cropMode: 'cover' | 'contain' | 'fill' = 'contain'): void {
+  renderFrame(
+    source: TexImageSource, 
+    cropMode: 'cover' | 'contain' | 'fill' = 'contain',
+    skipClear: boolean = false
+  ): void {
     if (!this.gl || !this.texture || !this.program) return
     
     const gl = this.gl
@@ -1143,8 +1155,15 @@ export class WebGLRenderer {
     
     // 绘制
     this.gl.viewport(0, 0, this.canvas.width, this.canvas.height)
-    this.gl.clearColor(0, 0, 0, 1) // 不透明黑色背景（确保导出视频正确）
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT)
+    
+    // [关键修复] 条件性清屏
+    // - 渲染到屏幕时：使用不透明黑色背景（确保导出视频背景正确）
+    // - 渲染到 FBO 时：跳过清屏，保留调用者设置的透明背景（特效 Alpha 遮罩需要）
+    if (!skipClear) {
+      this.gl.clearColor(0, 0, 0, 1) // 不透明黑色背景
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT)
+    }
+    
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6)
   }
 

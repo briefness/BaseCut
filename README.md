@@ -38,6 +38,12 @@
 - **Sprite 缩略图引擎**：支持长视频雪碧图预览，拖拽时间轴实时响应，零卡顿体验。
 - **波形可视化**：异步加载音频波形数据，提供精准的音频编辑辅助。
 
+### ⏪ 企业级撤销/重做系统
+- **命令模式架构**：所有编辑操作封装为可逆命令，支持无限撤销/重做。
+- **智能命令合并**：连续同类操作自动合并，减少历史记录膨胀。
+- **全局快捷键**：原生 `Ctrl+Z` / `Ctrl+Shift+Z` 支持。
+- **Store 全覆盖**：时间轴、特效、动画、项目设置等所有状态均支持撤销。
+
 ---
 
 ## 🛠 技术架构
@@ -49,14 +55,21 @@ vue-baseCut/
 ├── src/
 │   ├── engine/                  # 核心播放与渲染引擎
 │   │   ├── MediaController.ts   # 多媒体总线控制（核心）
-│   │   ├── VideoPool.ts         # 视频元素复用池（性能优化）
+│   │   ├── VideoPool.ts         # 视频元素复用池（LRU O(1) 优化）
 │   │   ├── PlaybackClock.ts     # 高精度播放时钟
 │   │   ├── WebGLRenderer.ts     # WebGL 渲染器（滤镜/特效/转场）
 │   │   ├── EffectManager.ts     # 特效管理器（Ping-Pong 渲染）
 │   │   ├── EffectShaders.ts     # GLSL 特效着色器集合
+│   │   ├── AnimationEngine.ts   # 关键帧动画引擎
+│   │   ├── HistoryManager.ts    # 撤销/重做核心引擎
 │   │   ├── WebCodecsExporter.ts # WebCodecs 视频导出
 │   │   ├── HLSPlayer.ts         # HLS 流播放封装
-│   │   └── FFmpegCore.ts        # WASM 媒体处理核心
+│   │   ├── FFmpegCore.ts        # WASM 媒体处理核心
+│   │   └── commands/            # 历史命令类
+│   │       ├── TimelineCommands.ts
+│   │       ├── EffectCommands.ts
+│   │       ├── AnimationCommands.ts
+│   │       └── ProjectCommands.ts
 │   │
 │   ├── components/              # UI 组件库
 │   │   ├── player/              # 播放器模块
@@ -65,8 +78,11 @@ vue-baseCut/
 │   │   └── export/              # 导出对话框
 │   │
 │   ├── stores/                  # 状态管理 (Pinia)
-│   │   ├── timeline.ts          # 时间轴状态
-│   │   └── effects.ts           # 特效状态
+│   │   ├── timeline.ts          # 时间轴状态（支持撤销）
+│   │   ├── effects.ts           # 特效状态（支持撤销）
+│   │   ├── animation.ts         # 动画状态（支持撤销）
+│   │   ├── history.ts           # 历史记录 Store
+│   │   └── project.ts           # 项目设置（支持撤销）
 │   │
 │   └── types/                   # TypeScript 类型定义
 │       └── effects.ts           # 特效类型定义
@@ -139,6 +155,7 @@ pnpm build
 7. [视频特效系统](./docs/blog/07-effect-system.md)
 8. [关键帧动画系统](./docs/blog/08-keyframe-animation.md)
 9. [性能优化](./docs/blog/09-performance-optimization.md)
+10. [撤销/重做系统](./docs/blog/10-undo-redo.md)
 
 ---
 
@@ -150,7 +167,8 @@ pnpm build
 - [x] **v0.4.0**: 视频特效系统（10+ 特效，Ping-Pong 渲染）
 - [x] **v0.5.0**: WebCodecs 硬件加速导出
 - [x] **v0.6.0**: 关键帧动画系统
-- [ ] **v0.7.0**: 音频特效与可视化
+- [x] **v0.7.0**: 撤销/重做系统（命令模式，全 Store 覆盖）
+- [ ] **v0.8.0**: 音频特效与可视化
 
 ---
 

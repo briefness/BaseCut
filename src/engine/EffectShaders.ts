@@ -74,6 +74,8 @@ export const SHAKE_VERTEX_SHADER = `
 /**
  * 闪白特效
  * 将画面与指定颜色混合
+ * 
+ * [修复] 透明区域直接输出，确保黑边区域不受影响
  */
 export const FLASH_FRAGMENT_SHADER = `
   precision mediump float;
@@ -85,10 +87,17 @@ export const FLASH_FRAGMENT_SHADER = `
   
   void main() {
     vec4 texColor = texture2D(u_texture, v_texCoord);
+    
+    // [关键] 透明区域直接输出，不混合闪白颜色
+    if (texColor.a < 0.001) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+      return;
+    }
+    
     vec3 flashColor = u_color;
     
-    // 线性混合 (基于 Alpha 遮罩)
-    vec3 result = mix(texColor.rgb, flashColor, u_intensity * texColor.a);
+    // 线性混合（仅影响不透明区域）
+    vec3 result = mix(texColor.rgb, flashColor, u_intensity);
     
     gl_FragColor = vec4(result, texColor.a);
   }
@@ -277,6 +286,8 @@ export const PIXELATE_FRAGMENT_SHADER = `
 /**
  * 负片特效
  * 颜色反转
+ * 
+ * [修复] 透明区域直接输出，不应用任何效果
  */
 export const INVERT_FRAGMENT_SHADER = `
   precision mediump float;
@@ -288,9 +299,15 @@ export const INVERT_FRAGMENT_SHADER = `
   void main() {
     vec4 color = texture2D(u_texture, v_texCoord);
     
-    // 反转并混合 (基于 Alpha 遮罩)
+    // [关键] 透明区域直接输出
+    if (color.a < 0.001) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+      return;
+    }
+    
+    // 反转并混合
     vec3 inverted = 1.0 - color.rgb;
-    vec3 result = mix(color.rgb, inverted, u_intensity * color.a);
+    vec3 result = mix(color.rgb, inverted, u_intensity);
     
     gl_FragColor = vec4(result, color.a);
   }
@@ -299,6 +316,8 @@ export const INVERT_FRAGMENT_SHADER = `
 /**
  * 老电影特效
  * 噪点 + 划痕 + 闪烁 + 复古色调
+ * 
+ * [修复] 所有效果都应用 Alpha 遮罩，确保透明区域不受影响
  */
 export const FILM_GRAIN_FRAGMENT_SHADER = `
   precision mediump float;
@@ -320,17 +339,24 @@ export const FILM_GRAIN_FRAGMENT_SHADER = `
   void main() {
     vec2 uv = v_texCoord;
     vec4 color = texture2D(u_texture, uv);
+    
+    // [关键] 透明区域直接输出，不应用任何效果
+    if (color.a < 0.001) {
+      gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+      return;
+    }
+    
     vec3 rgb = color.rgb;
     
     // 噪点 (应用 Alpha 遮罩)
     float grain = random(uv + fract(u_time * 100.0)) * 2.0 - 1.0;
-    rgb += grain * u_grainIntensity * 0.2 * color.a;
+    rgb += grain * u_grainIntensity * 0.2;
     
     // 划痕（垂直随机线条）
     float scratchX = random(vec2(floor(u_time * 5.0), 0.0));
     float scratch = step(0.99 - u_scratchIntensity * 0.02, abs(uv.x - scratchX));
     scratch *= random(vec2(uv.y, u_time)) * 0.3;
-    rgb += scratch * color.a;
+    rgb += scratch;
     
     // 闪烁
     float flicker = 1.0 - u_flickerIntensity * 0.1 * random(vec2(floor(u_time * 24.0), 0.0));
