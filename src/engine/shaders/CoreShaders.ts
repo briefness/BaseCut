@@ -1,21 +1,17 @@
 /**
- * CoreShaders - 核心着色器代码集合
+ * 着色器源代码集合
+ * 从 WebGLRenderer.ts 提取，便于维护和复用
  * 
- * 将所有 GLSL 着色器代码集中管理，便于：
- * 1. 代码复用（HSL/RGB 转换等通用函数）
- * 2. 着色器缓存和预编译
- * 3. 统一维护和版本控制
- * 
- * @module shaders/CoreShaders
+ * @module engine/shaders
  */
 
-// ==================== 通用工具函数 ====================
+// ==================== 公共着色器函数 ====================
 
 /**
- * RGB/HSL 互转工具函数（GLSL）
- * 用于色相、饱和度调整
+ * GLSL 公共函数：RGB 与 HSL 互转
+ * 被多个着色器复用，避免代码重复
  */
-export const COLOR_UTILS_GLSL = `
+export const GLSL_COLOR_FUNCTIONS = `
   // RGB 转 HSL
   vec3 rgb2hsl(vec3 c) {
     float maxC = max(max(c.r, c.g), c.b);
@@ -72,9 +68,9 @@ export const COLOR_UTILS_GLSL = `
 
 /**
  * 基础顶点着色器
- * 用于全屏 Quad 渲染
+ * 简单的坐标传递和纹理坐标插值
  */
-export const VERTEX_SHADER = `
+export const BASIC_VERTEX_SHADER = `
   attribute vec2 a_position;
   attribute vec2 a_texCoord;
   varying vec2 v_texCoord;
@@ -86,10 +82,10 @@ export const VERTEX_SHADER = `
 `
 
 /**
- * 滤镜片段着色器
- * 支持亮度、对比度、饱和度、色相调整
+ * 基础片段着色器
+ * 支持亮度、对比度、饱和度、色相滤镜
  */
-export const FRAGMENT_SHADER = `
+export const BASIC_FRAGMENT_SHADER = `
   precision mediump float;
   
   varying vec2 v_texCoord;
@@ -102,7 +98,7 @@ export const FRAGMENT_SHADER = `
   uniform float u_hue;
   uniform float u_blur;
   
-  ${COLOR_UTILS_GLSL}
+  ${GLSL_COLOR_FUNCTIONS}
   
   void main() {
     vec4 color = texture2D(u_texture, v_texCoord);
@@ -130,22 +126,8 @@ export const FRAGMENT_SHADER = `
 // ==================== 转场着色器 ====================
 
 /**
- * 缓动函数（GLSL）
- * 使转场效果更丝滑
- */
-export const EASING_UTILS_GLSL = `
-  float easeInOutCubic(float t) {
-    return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
-  }
-  
-  float easeOutQuad(float t) {
-    return 1.0 - (1.0 - t) * (1.0 - t);
-  }
-`
-
-/**
  * 转场片段着色器
- * 支持多种 GPU 加速转场效果
+ * 支持多种 GPU 加速转场效果：fade, dissolve, slide, wipe, zoom 等
  */
 export const TRANSITION_FRAGMENT_SHADER = `
   precision mediump float;
@@ -156,7 +138,14 @@ export const TRANSITION_FRAGMENT_SHADER = `
   uniform float u_progress;       // 转场进度 0-1
   uniform int u_transitionType;   // 转场类型
   
-  ${EASING_UTILS_GLSL}
+  // 缓动函数 - 使转场更丝滑
+  float easeInOutCubic(float t) {
+    return t < 0.5 ? 4.0 * t * t * t : 1.0 - pow(-2.0 * t + 2.0, 3.0) / 2.0;
+  }
+  
+  float easeOutQuad(float t) {
+    return 1.0 - (1.0 - t) * (1.0 - t);
+  }
   
   void main() {
     vec4 colorA = texture2D(u_textureA, v_texCoord);
@@ -247,7 +236,7 @@ export const TRANSITION_FRAGMENT_SHADER = `
 
 /**
  * 叠加层顶点着色器
- * 支持位置、缩放、旋转变换
+ * 支持位置、缩放、旋转变换（用于贴纸、画中画）
  */
 export const OVERLAY_VERTEX_SHADER = `
   attribute vec2 a_position; // 标准 Quad (-1 到 1)
@@ -293,7 +282,7 @@ export const OVERLAY_VERTEX_SHADER = `
 
 /**
  * 叠加层片段着色器
- * 支持透明度
+ * 支持透明度控制
  */
 export const OVERLAY_FRAGMENT_SHADER = `
   precision mediump float;
@@ -307,18 +296,18 @@ export const OVERLAY_FRAGMENT_SHADER = `
   }
 `
 
-// ==================== 动画渲染着色器 ====================
+// ==================== 动画着色器 ====================
 
 /**
  * 动画顶点着色器
- * 支持 4x4 变换矩阵，实现位置、缩放、旋转
+ * 支持 4x4 变换矩阵，实现位置、缩放、旋转动画
  */
 export const ANIMATED_VERTEX_SHADER = `
   attribute vec2 a_position;
   attribute vec2 a_texCoord;
   varying vec2 v_texCoord;
   
-  uniform mat4 u_transform;    // 变换矩阵
+  uniform mat4 u_transform;    // 变换矩阵（列主序）
   uniform vec2 u_resolution;   // 画布尺寸
   
   void main() {
@@ -337,7 +326,7 @@ export const ANIMATED_VERTEX_SHADER = `
 
 /**
  * 动画片段着色器
- * 支持透明度和滤镜
+ * 支持透明度动画和滤镜参数
  */
 export const ANIMATED_FRAGMENT_SHADER = `
   precision mediump float;
@@ -352,7 +341,7 @@ export const ANIMATED_FRAGMENT_SHADER = `
   uniform float u_saturation;
   uniform float u_hue;
   
-  ${COLOR_UTILS_GLSL}
+  ${GLSL_COLOR_FUNCTIONS}
   
   void main() {
     vec4 color = texture2D(u_texture, v_texCoord);
@@ -378,30 +367,28 @@ export const ANIMATED_FRAGMENT_SHADER = `
   }
 `
 
-// ==================== 着色器程序 ID 常量 ====================
+// ==================== 导出所有着色器 ====================
 
 /**
- * 着色器程序标识符
- * 用于程序缓存的 key
+ * 核心着色器集合
+ * 便于一次性导入
  */
-export const SHADER_PROGRAM_IDS = {
-  BASIC: 'basic',           // 基础滤镜渲染
-  TRANSITION: 'transition', // 转场效果
-  OVERLAY: 'overlay',       // 叠加层
-  ANIMATED: 'animated'      // 动画变换
+export const CoreShaders = {
+  // 基础
+  BASIC_VERTEX: BASIC_VERTEX_SHADER,
+  BASIC_FRAGMENT: BASIC_FRAGMENT_SHADER,
+  
+  // 转场
+  TRANSITION_FRAGMENT: TRANSITION_FRAGMENT_SHADER,
+  
+  // 叠加层
+  OVERLAY_VERTEX: OVERLAY_VERTEX_SHADER,
+  OVERLAY_FRAGMENT: OVERLAY_FRAGMENT_SHADER,
+  
+  // 动画
+  ANIMATED_VERTEX: ANIMATED_VERTEX_SHADER,
+  ANIMATED_FRAGMENT: ANIMATED_FRAGMENT_SHADER,
+  
+  // 公共函数
+  COLOR_FUNCTIONS: GLSL_COLOR_FUNCTIONS,
 } as const
-
-/**
- * 转场类型映射表
- */
-export const TRANSITION_TYPE_MAP: Record<string, number> = {
-  'fade': 0,
-  'dissolve': 1,
-  'slideLeft': 2,
-  'slideRight': 3,
-  'wipe': 4,
-  'zoom': 5,
-  'blur': 6,
-  'slideUp': 7,
-  'slideDown': 8
-}

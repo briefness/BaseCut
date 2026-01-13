@@ -74,7 +74,10 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
-   * 添加素材
+   * 添加素材（事务模式）
+   * 
+   * 设计原则：先持久化到 IndexedDB，成功后再加入内存状态
+   * 失败时自动回滚已创建的资源（Blob URL），确保状态一致性
    */
   async function addMaterial(file: File, forceType?: MaterialType): Promise<Material> {
     uploadProgress.value = 0
@@ -82,6 +85,7 @@ export const useResourceStore = defineStore('resource', () => {
     const id = crypto.randomUUID()
     const type = forceType || getFileType(file)
     const blobUrl = URL.createObjectURL(file)
+    let thumbnail: string | undefined
 
     // 基础素材信息
     const material: Material = {
@@ -93,114 +97,124 @@ export const useResourceStore = defineStore('resource', () => {
       createdAt: Date.now()
     }
 
-    // 获取媒体信息
-    if (type === 'video' || type === 'audio') {
-      try {
-        const info = await getMediaInfo(blobUrl, type)
-        material.duration = info.duration
-        material.width = info.width
-        material.height = info.height
-      } catch (error) {
-        console.warn('获取媒体信息失败:', error)
+    try {
+      // 获取媒体信息
+      if (type === 'video' || type === 'audio') {
+        try {
+          const info = await getMediaInfo(blobUrl, type)
+          material.duration = info.duration
+          material.width = info.width
+          material.height = info.height
+        } catch (error) {
+          console.warn('获取媒体信息失败:', error)
+        }
+      } else if (type === 'image' || type === 'sticker') {
+        try {
+          const info = await getImageInfo(blobUrl)
+          material.width = info.width
+          material.height = info.height
+        } catch (error) {
+          console.warn('获取图片信息失败:', error)
+        }
       }
-    } else if (type === 'image' || type === 'sticker') {
-      try {
-        const info = await getImageInfo(blobUrl)
-        material.width = info.width
-        material.height = info.height
-      } catch (error) {
-        console.warn('获取图片信息失败:', error)
+
+      // 生成视频缩略图
+      if (type === 'video') {
+        try {
+          const thumbBlob = await ffmpegCore.generateThumbnail(file, 0, 160)
+          thumbnail = URL.createObjectURL(thumbBlob)
+          material.thumbnail = thumbnail
+        } catch (error) {
+          console.warn('生成缩略图失败:', error)
+        }
       }
-    }
 
-    // 生成视频缩略图
-    if (type === 'video') {
-      try {
-        const thumbBlob = await ffmpegCore.generateThumbnail(file, 0, 160)
-        material.thumbnail = URL.createObjectURL(thumbBlob)
-      } catch (error) {
-        console.warn('生成缩略图失败:', error)
+      // 准备 IndexedDB 数据
+      const fileBuffer = await file.arrayBuffer()
+      const dbMaterial: DBMaterial = {
+        id,
+        name: file.name,
+        type,
+        fileData: fileBuffer,
+        mimeType: file.type,
+        duration: material.duration,
+        width: material.width,
+        height: material.height,
+        createdAt: material.createdAt
       }
+
+      if (material.thumbnail) {
+        const thumbResponse = await fetch(material.thumbnail)
+        dbMaterial.thumbnailData = await thumbResponse.arrayBuffer()
+      }
+
+      // 先持久化到 IndexedDB（事务关键步骤）
+      await dbManager.addMaterial(dbMaterial)
+      
+      // 持久化成功，添加到内存状态
+      materials.value.push(material)
+      uploadProgress.value = 100
+
+      return material
+    } catch (error) {
+      // 事务失败，回滚：释放已创建的 Blob URL
+      URL.revokeObjectURL(blobUrl)
+      if (thumbnail) {
+        URL.revokeObjectURL(thumbnail)
+      }
+      
+      console.error('[ResourceStore] 添加素材失败，已回滚:', error)
+      throw error
     }
-
-    // 添加到状态
-    materials.value.push(material)
-
-    // 注意：HLS 本地转换暂时禁用
-    // 原因：hls.js 无法直接播放 Blob URL 格式的 m3u8（分片路径问题）
-    // 解决方案：需要 Service Worker 或后端服务来提供 HLS 流
-    // 当前使用原始 Blob URL 播放视频
-    // 
-    // if (type === 'video') {
-    //   material.isConverting = true
-    //   convertToHLSAsync(material, file)
-    // }
-
-    // 存储到 IndexedDB
-    const fileBuffer = await file.arrayBuffer()
-    const dbMaterial: DBMaterial = {
-      id,
-      name: file.name,
-      type,
-      fileData: fileBuffer,
-      mimeType: file.type,
-      duration: material.duration,
-      width: material.width,
-      height: material.height,
-      createdAt: material.createdAt
-    }
-
-    if (material.thumbnail) {
-      const thumbResponse = await fetch(material.thumbnail)
-      dbMaterial.thumbnailData = await thumbResponse.arrayBuffer()
-    }
-
-    await dbManager.addMaterial(dbMaterial)
-    uploadProgress.value = 100
-
-    return material
   }
 
   /**
-   * 后台异步转换视频为 HLS
+   * 批量添加素材（并发控制）
+   * 
+   * 使用并发池而非串行处理，大幅提升批量上传性能
+   * @param files 文件列表
+   * @param forceType 强制类型
+   * @param concurrency 最大并发数，默认 3
    */
-  /**
-   * 后台异步转换视频为 HLS
-   */
-  // async function convertToHLSAsync(material: Material, file: File): Promise<void> {
-  //   try {
-  //     console.log(`[ResourceStore] 开始转换 ${material.name} 为 HLS...`)
-  //     
-  //     // 设置进度回调
-  //     ffmpegCore.onProgress((progress) => {
-  //       console.log(`[ResourceStore] HLS 转换进度: ${Math.round(progress * 100)}%`)
-  //     })
-  //
-  //     const result = await ffmpegCore.convertToHLS(file, {
-  //       segmentDuration: 4
-  //     })
-  //
-  //     // 更新素材的 HLS URL
-  //     material.hlsUrl = result.playlistUrl
-  //     material.isConverting = false
-  //
-  //     console.log(`[ResourceStore] ${material.name} HLS 转换完成`)
-  //   } catch (error) {
-  //     console.error(`[ResourceStore] HLS 转换失败:`, error)
-  //     material.isConverting = false
-  //     // 失败时继续使用原始 blobUrl
-  //   }
-  // }
-
-  /**
-   * 批量添加素材
-   */
-  async function addMaterials(files: File[], forceType?: MaterialType): Promise<Material[]> {
+  async function addMaterials(
+    files: File[], 
+    forceType?: MaterialType,
+    concurrency = 3
+  ): Promise<Material[]> {
     const results: Material[] = []
+    const errors: Array<{ file: string; error: unknown }> = []
     
-    for (let i = 0; i < files.length; i++) {
-      const material = await addMaterial(files[i], forceType)
-      results.push(material)
+    // 并发控制器
+    const executing = new Set<Promise<void>>()
+    
+    for (const file of files) {
+      // 创建任务 Promise
+      const task = addMaterial(file, forceType)
+        .then(material => {
+          results.push(material)
+        })
+        .catch(error => {
+          console.warn('[ResourceStore] 素材添加失败:', file.name, error)
+          errors.push({ file: file.name, error })
+        })
+        .finally(() => {
+          executing.delete(task)
+        })
+      
+      executing.add(task)
+      
+      // 达到并发上限时，等待一个任务完成
+      if (executing.size >= concurrency) {
+        await Promise.race(executing)
+      }
+    }
+    
+    // 等待所有剩余任务完成
+    await Promise.all(executing)
+    
+    // 输出汇总信息
+    if (errors.length > 0) {
+      console.warn(`[ResourceStore] 批量添加完成: 成功 ${results.length}/${files.length}，失败 ${errors.length}`)
     }
 
     return results

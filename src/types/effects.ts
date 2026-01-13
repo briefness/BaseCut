@@ -115,7 +115,38 @@ export interface SplitScreenParams {
 }
 
 /**
+ * 各特效参数类型映射（用于类型推导）
+ */
+export interface EffectParamsMap {
+  flash: FlashParams
+  shake: ShakeParams
+  glitch: GlitchParams
+  radialBlur: RadialBlurParams
+  chromatic: ChromaticParams
+  pixelate: PixelateParams
+  invert: InvertParams
+  filmGrain: FilmGrainParams
+  vignette: VignetteParams
+  splitScreen: SplitScreenParams
+}
+
+/**
  * 所有特效参数的联合类型
+ */
+export type AllEffectParams = 
+  | FlashParams 
+  | ShakeParams 
+  | GlitchParams 
+  | RadialBlurParams 
+  | ChromaticParams 
+  | PixelateParams 
+  | InvertParams 
+  | FilmGrainParams 
+  | VignetteParams 
+  | SplitScreenParams
+
+/**
+ * 带类型标签的特效参数（用于判别联合类型）
  */
 export type EffectParams =
   | { type: 'flash'; params: FlashParams }
@@ -166,8 +197,8 @@ export interface VideoEffect {
   startTime: number               // 开始时间（秒）
   duration: number                // 持续时间（秒）
   
-  // 特效参数
-  params: Record<string, number | string | boolean>
+  // 特效参数（收紧为联合类型，提供更好的类型安全）
+  params: Partial<AllEffectParams> & Record<string, unknown>
   
   // 入场/出场动画
   enterTransition?: EffectTransition
@@ -191,7 +222,7 @@ export interface VideoEffectPreset {
   icon: string                    // 图标（emoji 或 URL）
   description: string             // 描述
   category: EffectCategory        // 分类
-  defaultParams: Record<string, number | string | boolean>
+  defaultParams: Partial<AllEffectParams> & Record<string, unknown>
   defaultDuration: number         // 默认时长
 }
 

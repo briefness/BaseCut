@@ -1,14 +1,27 @@
 <script setup lang="ts">
+/**
+ * 属性面板入口组件
+ * 
+ * 重构后作为组合入口，委托给专门的子组件：
+ * - ProjectSettings: 项目设置
+ * - ClipProperties: 片段属性
+ * - TransitionSettings: 转场设置
+ */
 import { computed, ref, watch } from 'vue'
 import { useTimelineStore } from '@/stores/timeline'
 import { useResourceStore } from '@/stores/resource'
 import { useProjectStore } from '@/stores/project'
 import { useEffectsStore } from '@/stores/effects'
+
+// 拆分后的子组件
+import ProjectSettings from './ProjectSettings.vue'
+import ClipProperties from './ClipProperties.vue'
+import TransitionSettings from './TransitionSettings.vue'
 import SubtitleEditor from './SubtitleEditor.vue'
 import EffectPanel from '../effect/EffectPanel.vue'
 import EffectProperty from '../effect/EffectProperty.vue'
 import AnimationPanel from '../animation/AnimationPanel.vue'
-import { TRANSITION_PRESETS, type TransitionType } from '@/types'
+
 
 const timelineStore = useTimelineStore()
 const resourceStore = useResourceStore()
@@ -80,29 +93,7 @@ const nextClip = computed(() => {
   return null
 })
 
-// 当前转场效果
-const currentTransition = computed(() => {
-  if (!selectedClip.value || !nextClip.value) return null
-  return timelineStore.getTransitionBetween(selectedClip.value.id, nextClip.value.id)
-})
 
-// 转场时长
-const transitionDuration = ref(0.5)
-
-// 选择转场效果
-function selectTransition(type: TransitionType): void {
-  if (!selectedClip.value || !nextClip.value) return
-  timelineStore.addTransition(selectedClip.value.id, nextClip.value.id, type, transitionDuration.value)
-  projectStore.markDirty()
-}
-
-// 移除转场
-function removeTransition(): void {
-  if (currentTransition.value) {
-    timelineStore.removeTransition(currentTransition.value.id)
-    projectStore.markDirty()
-  }
-}
 
 // 删除片段
 function deleteClip() {
@@ -165,59 +156,9 @@ watch(selectedClip, () => {
     <!-- 属性内容区 -->
     <div v-show="activeTab === 'property'" class="panel-content scrollbar-hide">
       
-      <!-- 场景1：未选中片段 -> 显示项目设置 (Contextual Layout) -->
+      <!-- 场景1：未选中片段 -> 显示项目设置 -->
       <transition name="fade-slide" mode="out-in">
-        <div v-if="!selectedClip" class="context-panel project-settings" key="project-settings">
-          <div class="panel-header-lg">
-            <h3>项目设置</h3>
-            <span class="header-subtitle">全局配置</span>
-          </div>
-          
-          <div class="panel-group">
-            <div class="group-title">视频规格</div>
-            <div class="control-grid">
-              <!-- 分辨率 -->
-              <div class="control-item">
-                <label>分辨率</label>
-                <div class="select-wrapper">
-                  <select 
-                    class="custom-select"
-                    :value="`${projectStore.canvasWidth}x${projectStore.canvasHeight}`"
-                    @change="(e) => {
-                      const [w, h] = (e.target as HTMLSelectElement).value.split('x').map(Number)
-                      projectStore.setCanvasSize(w, h)
-                    }"
-                  >
-                    <option v-for="preset in projectStore.presets" :key="preset.name" :value="`${preset.width}x${preset.height}`">
-                      {{ preset.name }} ({{ preset.width }}×{{ preset.height }})
-                    </option>
-                  </select>
-                  <span class="select-arrow">▼</span>
-                </div>
-              </div>
-
-              <!-- 帧率 -->
-              <div class="control-item">
-                <label>帧率</label>
-                <div class="input-wrapper suffix">
-                  <input 
-                    type="number"
-                    class="custom-input"
-                    :value="projectStore.frameRate"
-                    min="24"
-                    max="60"
-                    @change="(e) => projectStore.setFrameRate(Number((e.target as HTMLInputElement).value))"
-                  />
-                  <span class="suffix-text">fps</span>
-                </div>
-              </div>
-            </div>
-            
-            <div class="group-info">
-              💡 修改项目设置将影响最终导出的视频规格
-            </div>
-          </div>
-        </div>
+        <ProjectSettings v-if="!selectedClip" key="project-settings" />
 
         <!-- 场景2：选中片段 -> 显示片段属性 -->
         <div v-else class="context-panel clip-properties" key="clip-properties">
@@ -312,32 +253,11 @@ watch(selectedClip, () => {
           </div>
 
           <!-- 转场设置 (仅视频显示) -->
-          <div v-if="isVideoClip && nextClip" class="panel-group">
-            <div class="group-title">
-              <span>转场效果</span>
-              <span v-if="currentTransition" class="badge-active">已应用</span>
-            </div>
-            
-            <div class="transition-selector">
-              <div 
-                v-for="preset in TRANSITION_PRESETS"
-                :key="preset.type"
-                class="transition-option"
-                :class="{ active: currentTransition?.type === preset.type }"
-                @click="selectTransition(preset.type)"
-                :title="preset.name"
-              >
-                <span class="icon">{{ preset.icon }}</span>
-                <span class="name">{{ preset.name }}</span>
-              </div>
-            </div>
-            
-            <div v-if="currentTransition" class="control-row mt-2">
-               <button class="btn-text danger" @click="removeTransition">
-                 🗑️移除转场
-               </button>
-            </div>
-          </div>
+          <TransitionSettings 
+            v-if="isVideoClip && nextClip" 
+            :currentClip="selectedClip!"
+            :nextClip="nextClip"
+          />
 
           <!-- 字幕编辑器 (仅文字显示) -->
           <div v-if="isTextClip" class="panel-group">
