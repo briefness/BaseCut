@@ -15,6 +15,7 @@ import {
   SetFrameRateCommand,
   RenameProjectCommand
 } from '@/engine/commands'
+import { sanitizeProject } from '@/utils/projectSerializer'
 
 export const useProjectStore = defineStore('project', () => {
   // ==================== 状态 ====================
@@ -80,10 +81,13 @@ export const useProjectStore = defineStore('project', () => {
       projectId.value = crypto.randomUUID()
     }
 
+    // 清理数据，去除响应式和不可直接存储的对象
+    const cleanProjectData = sanitizeProject(currentProject.value)
+
     const dbProject: DBProject = {
       id: projectId.value,
       name: projectName.value,
-      data: currentProject.value,
+      data: cleanProjectData,
       createdAt: Date.now(),
       updatedAt: Date.now()
     }

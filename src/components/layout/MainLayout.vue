@@ -5,15 +5,22 @@ import Player from '../player/Player.vue'
 import Timeline from '../timeline/Timeline.vue'
 import PropertyPanel from '../property/PropertyPanel.vue'
 import ExportDialog from '../export/ExportDialog.vue'
+import ProjectListDialog from '../project/ProjectListDialog.vue'
 import { useProjectStore } from '@/stores/project'
 
 const projectStore = useProjectStore()
 
 // 导出对话框状态
 const showExportDialog = ref(false)
+// 项目列表对话框状态
+const showProjectListDialog = ref(false)
 
 function openExportDialog() {
   showExportDialog.value = true
+}
+
+function openProjectList() {
+  showProjectListDialog.value = true
 }
 </script>
 
@@ -38,6 +45,9 @@ function openExportDialog() {
       </div>
       
       <div class="header-right">
+        <button class="btn btn-ghost" @click="openProjectList">
+          <span>📂</span> 打开
+        </button>
         <button class="btn btn-ghost" @click="projectStore.save">
           <span>💾</span> 保存
         </button>
@@ -74,6 +84,9 @@ function openExportDialog() {
     
     <!-- 导出对话框 -->
     <ExportDialog v-model:visible="showExportDialog" />
+    
+    <!-- 项目列表对话框 -->
+    <ProjectListDialog v-model:visible="showProjectListDialog" />
   </div>
 </template>
 
