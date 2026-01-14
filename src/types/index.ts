@@ -329,6 +329,26 @@ export interface DBMaterial {
   height?: number
   thumbnailData?: ArrayBuffer
   createdAt: number
+  
+  // 雪碧图缓存
+  spriteSheets?: ArrayBuffer[]   // 雪碧图二进制数据（可能多张）
+  spriteMetadata?: {
+    totalFrames: number
+    frameInterval: number
+    totalDuration: number
+    frameWidth: number
+    frameHeight: number
+    sheets: Array<{
+      index: number
+      cols: number
+      rows: number
+      frameWidth: number
+      frameHeight: number
+      frameCount: number
+      startFrame: number
+      startTime: number
+    }>
+  }
 }
 
 export interface DBProject {

@@ -78,14 +78,29 @@ export const useResourceStore = defineStore('resource', () => {
    * 
    * 设计原则：先持久化到 IndexedDB，成功后再加入内存状态
    * 失败时自动回滚已创建的资源（Blob URL），确保状态一致性
+   * 
+   * 新增功能：
+   * - 存储配额预检查
+   * - 视频雪碧图自动生成
    */
   async function addMaterial(file: File, forceType?: MaterialType): Promise<Material> {
     uploadProgress.value = 0
+    
+    // 1. 存储配额预检查
+    const { storageQuotaManager } = await import('@/db/StorageQuotaManager')
+    if (!await storageQuotaManager.canStore(file.size)) {
+      console.log('[ResourceStore] 存储空间不足，尝试清理...')
+      const result = await storageQuotaManager.freeSpace(file.size)
+      if (!result.success || result.freedBytes < file.size) {
+        throw new Error('存储空间不足，请手动删除部分素材')
+      }
+    }
     
     const id = crypto.randomUUID()
     const type = forceType || getFileType(file)
     const blobUrl = URL.createObjectURL(file)
     let thumbnail: string | undefined
+    let spriteUrls: string[] = []
 
     // 基础素材信息
     const material: Material = {
@@ -148,6 +163,11 @@ export const useResourceStore = defineStore('resource', () => {
         dbMaterial.thumbnailData = await thumbResponse.arrayBuffer()
       }
 
+      // 2. 生成视频雪碧图（后台异步，不阻塞主流程）
+      if (type === 'video' && material.duration) {
+        generateSpriteAsync(id, blobUrl, dbMaterial)
+      }
+
       // 先持久化到 IndexedDB（事务关键步骤）
       await dbManager.addMaterial(dbMaterial)
       
@@ -162,9 +182,38 @@ export const useResourceStore = defineStore('resource', () => {
       if (thumbnail) {
         URL.revokeObjectURL(thumbnail)
       }
+      spriteUrls.forEach(url => URL.revokeObjectURL(url))
       
       console.error('[ResourceStore] 添加素材失败，已回滚:', error)
       throw error
+    }
+  }
+
+  /**
+   * 后台生成雪碧图（不阻塞主流程）
+   */
+  async function generateSpriteAsync(
+    materialId: string, 
+    videoUrl: string,
+    dbMaterial: DBMaterial
+  ): Promise<void> {
+    try {
+      const { ThumbnailSprite } = await import('@/engine/ThumbnailSprite')
+      const result = await ThumbnailSprite.generate(videoUrl, materialId)
+      
+      // 转换 Blob 为 ArrayBuffer
+      const spriteSheets = await Promise.all(
+        result.blobs.map(blob => blob.arrayBuffer())
+      )
+      
+      // 更新 IndexedDB 中的雪碧图数据
+      dbMaterial.spriteSheets = spriteSheets
+      dbMaterial.spriteMetadata = result.metadata
+      await dbManager.addMaterial(dbMaterial)
+      
+      console.log(`[ResourceStore] 雪碧图生成完成: ${result.blobs.length} 张`)
+    } catch (error) {
+      console.warn('[ResourceStore] 雪碧图生成失败:', error)
     }
   }
 

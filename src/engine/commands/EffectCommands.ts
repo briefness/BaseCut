@@ -196,7 +196,7 @@ export class UpdateEffectParamCommand extends EffectCommand {
     const { effect } = store._findEffectDirect(this.effectId)
     
     if (effect && this.oldValue === null) {
-      this.oldValue = effect.params[this.paramName]
+      this.oldValue = effect.params[this.paramName] as string | number | boolean | null
     }
     
     store._updateEffectParamDirect(this.effectId, this.paramName, this.newValue)

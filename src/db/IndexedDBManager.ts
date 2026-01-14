@@ -116,6 +116,51 @@ class IndexedDBManager {
     await this.db!.clear('materials')
   }
 
+  /**
+   * 获取素材列表（按创建时间升序，用于 LRU 清理）
+   */
+  async getMaterialsSortedByDate(): Promise<Array<{
+    id: string
+    size: number
+    createdAt: number
+  }>> {
+    await this.init()
+    const materials = await this.db!.getAllFromIndex('materials', 'by-date')
+    
+    return materials.map(m => ({
+      id: m.id,
+      // 计算素材大小：文件数据 + 缩略图
+      size: (m.fileData?.byteLength || 0) + (m.thumbnailData?.byteLength || 0),
+      createdAt: m.createdAt
+    }))
+  }
+
+  /**
+   * 批量删除素材
+   */
+  async deleteMaterialsBatch(ids: string[]): Promise<void> {
+    await this.init()
+    const tx = this.db!.transaction('materials', 'readwrite')
+    
+    await Promise.all([
+      ...ids.map(id => tx.store.delete(id)),
+      tx.done
+    ])
+    
+    console.log(`[IndexedDB] 批量删除 ${ids.length} 个素材`)
+  }
+
+  /**
+   * 获取单个素材大小（字节）
+   */
+  async getMaterialSize(id: string): Promise<number> {
+    await this.init()
+    const material = await this.db!.get('materials', id)
+    if (!material) return 0
+    
+    return (material.fileData?.byteLength || 0) + (material.thumbnailData?.byteLength || 0)
+  }
+
   // ==================== 项目操作 ====================
 
   /**

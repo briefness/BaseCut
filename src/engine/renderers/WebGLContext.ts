@@ -107,7 +107,7 @@ export class WebGLContext {
       antialias: options.antialias ?? false,
       powerPreference: options.powerPreference ?? 'high-performance',
       preserveDrawingBuffer: options.preserveDrawingBuffer ?? false
-    })
+    }) as WebGLRenderingContext | null
 
     if (!this.gl) {
       console.error('[WebGLContext] WebGL 不可用')

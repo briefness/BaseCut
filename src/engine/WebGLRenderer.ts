@@ -108,7 +108,7 @@ export class WebGLRenderer {
       antialias: false,
       powerPreference: 'high-performance',
       preserveDrawingBuffer: this.options.preserveDrawingBuffer || false
-    })
+    }) as WebGLRenderingContext | null
     
     if (!this.gl) {
       console.error('WebGL 不可用')
@@ -891,6 +891,10 @@ export class WebGLRenderer {
 
   /**
    * GPU 加速转场渲染
+   * 
+   * [架构说明] 转场涉及两个视频源，需要同时考虑两者的宽高比。
+   * 使用 contain 模式确保两个视频都完整显示，以较窄的那个为准计算黑边。
+   * 
    * @param sourceA 第一个视频帧
    * @param sourceB 第二个视频帧
    * @param progress 转场进度 (0-1)
@@ -906,21 +910,75 @@ export class WebGLRenderer {
     
     const gl = this.gl
     
+    // [关键修复] 获取两个视频源的尺寸，计算正确的显示区域
+    const getSrcSize = (src: TexImageSource): { w: number, h: number } => {
+      if (src instanceof HTMLVideoElement) {
+        return { w: src.videoWidth, h: src.videoHeight }
+      } else if (src instanceof HTMLImageElement) {
+        return { w: src.naturalWidth, h: src.naturalHeight }
+      } else if (src instanceof HTMLCanvasElement) {
+        return { w: src.width, h: src.height }
+      }
+      return { w: 0, h: 0 }
+    }
+    
+    const sizeA = getSrcSize(sourceA)
+    const sizeB = getSrcSize(sourceB)
+    
+    // 取两个源中较大的宽高比（确保两个视频都能完整显示）
+    const canvasWidth = this.canvas.width
+    const canvasHeight = this.canvas.height
+    const canvasAspect = canvasWidth / canvasHeight
+    
+    // 计算两个视频各自的宽高比，默认为 1（方形）
+    const aspectA = sizeA.w > 0 && sizeA.h > 0 ? sizeA.w / sizeA.h : canvasAspect
+    const aspectB = sizeB.w > 0 && sizeB.h > 0 ? sizeB.w / sizeB.h : canvasAspect
+    
+    // 使用较竖的那个视频的宽高比（这样两个都能完整显示）
+    const sourceAspect = Math.min(aspectA, aspectB)
+    
+    // 计算 contain 模式的缩放比例
+    let scaleX = 1, scaleY = 1
+    if (sourceAspect > canvasAspect) {
+      // 源更宽，上下留黑边
+      scaleY = canvasAspect / sourceAspect
+    } else {
+      // 源更高，左右留黑边
+      scaleX = sourceAspect / canvasAspect
+    }
+    
+    // [关键修复] 更新顶点位置缓冲区，应用正确的缩放
+    const positions = new Float32Array([
+      -scaleX, -scaleY,
+       scaleX, -scaleY,
+      -scaleX,  scaleY,
+      -scaleX,  scaleY,
+       scaleX, -scaleY,
+       scaleX,  scaleY
+    ])
+    
+    // 标准纹理坐标（Y 轴翻转）
+    const texCoords = new Float32Array([
+      0, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0
+    ])
+    
     // 使用转场着色器程序
     gl.useProgram(this.transitionProgram)
     
-    // 绑定顶点属性
+    // 绑定顶点属性（使用正确缩放的几何数据）
     const posLoc = gl.getAttribLocation(this.transitionProgram, 'a_position')
     const texLoc = gl.getAttribLocation(this.transitionProgram, 'a_texCoord')
     
     if (this.positionBuffer) {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer)
+      gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW)
       gl.enableVertexAttribArray(posLoc)
       gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
     }
     
     if (this.texCoordBuffer) {
       gl.bindBuffer(gl.ARRAY_BUFFER, this.texCoordBuffer)
+      gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.DYNAMIC_DRAW)
       gl.enableVertexAttribArray(texLoc)
       gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0)
     }

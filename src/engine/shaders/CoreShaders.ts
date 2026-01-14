@@ -370,6 +370,38 @@ export const ANIMATED_FRAGMENT_SHADER = `
 // ==================== 导出所有着色器 ====================
 
 /**
+ * 着色器程序标识符
+ * 用于程序缓存的 key
+ */
+export const SHADER_PROGRAM_IDS = {
+  BASIC: 'basic',
+  TRANSITION: 'transition',
+  OVERLAY: 'overlay',
+  ANIMATED: 'animated',
+} as const
+
+/**
+ * 转场类型映射（类型名 -> 数字 ID）
+ */
+export const TRANSITION_TYPE_MAP: Record<string, number> = {
+  fade: 0,
+  dissolve: 1,
+  slideLeft: 2,
+  slideRight: 3,
+  wipe: 4,
+  zoom: 5,
+  blur: 6,
+  slideUp: 7,
+  slideDown: 8,
+}
+
+/**
+ * 别名导出（兼容旧代码引用）
+ */
+export const VERTEX_SHADER = BASIC_VERTEX_SHADER
+export const FRAGMENT_SHADER = BASIC_FRAGMENT_SHADER
+
+/**
  * 核心着色器集合
  * 便于一次性导入
  */
@@ -392,3 +424,4 @@ export const CoreShaders = {
   // 公共函数
   COLOR_FUNCTIONS: GLSL_COLOR_FUNCTIONS,
 } as const
+
