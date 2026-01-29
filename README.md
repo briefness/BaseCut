@@ -9,6 +9,9 @@
   <img src="https://img.shields.io/badge/WebCodecs-Enabled-FF6B6B?style=flat-square" alt="WebCodecs">
   <br>
   <sub>基于 WebGL 与 WebCodecs 的下一代云端视频剪辑解决方案（听听得了，拿来玩玩还是可以的）</sub>
+  <br>
+  <br>
+  <a href="https://base-cut.vercel.app/" target="_blank"><strong>🔗 在线体验 / Live Demo</strong></a>
 </p>
 
 ---
